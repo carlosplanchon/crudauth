@@ -4,6 +4,7 @@ version = "0.0.1"
 description = "Authentication for FastAPI."
 readme = "README.md"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "Igor Benav", email = "igor.magalhaes.r@gmail.com" }
 ]
