@@ -1,0 +1,313 @@
+"""Orchestrates verify / reset / change-email flows on top of signed tokens."""
+
+from __future__ import annotations
+
+import hashlib
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..constants import DEFAULT_ALGORITHM, SECONDS_PER_HOUR
+from ..exceptions import BadRequestException, DuplicateValueException
+from ..hooks import AuthHooks, HookContext
+from ..ratelimit import RateLimit
+from ..repository import UserRepository
+from ..storage.base import AbstractSessionStorage
+from ..transports.bearer.tokens import (
+    create_signed_token,
+    verify_signed_token,
+    verify_signed_token_full,
+)
+from ..utils import canonical_email, get_password_hash, verify_password
+from .config import EmailConfig
+from .constants import (
+    CHANGE,
+    CHANGE_ACTION,
+    RESET,
+    RESET_ACTION,
+    SUBJECT_CHANGE,
+    SUBJECT_EXISTING_ACCOUNT,
+    SUBJECT_RESET,
+    SUBJECT_VERIFY,
+    VERIFY,
+    VERIFY_ACTION,
+)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ..ratelimit import RateLimiterBackend
+    from ..transports.session.manager import SessionManager
+
+__all__ = ["EmailFlowService"]
+
+
+class _UsedToken(BaseModel):
+    used: bool = True
+
+
+class EmailFlowService:
+    """Mints/verifies signed tokens and drives the email flows.
+
+    The package owns token lifecycle; delivery is the app's
+    [EmailSender][crudauth.email.sender.EmailSender]. Trigger endpoints are throttled two ways: a
+    per-IP edge limit (in the router) and a **silent** per-target-email limit
+    here - silent because a 429 on a victim's address would re-introduce the
+    enumeration oracle and hand an attacker a DoS lever against that user.
+    """
+
+    def __init__(
+        self,
+        *,
+        repo: UserRepository,
+        secret_key: str,
+        config: EmailConfig,
+        hooks: AuthHooks,
+        algorithm: str = DEFAULT_ALGORITHM,
+        token_store: AbstractSessionStorage[Any] | None = None,
+        session_manager: "SessionManager | None" = None,
+        rate_limiter: "RateLimiterBackend | None" = None,
+        rate_limits: dict[str, RateLimit] | None = None,
+    ):
+        self.repo = repo
+        self.secret_key = secret_key
+        self.config = config
+        self.hooks = hooks
+        self.algorithm = algorithm
+        self.token_store = token_store
+        self.session_manager = session_manager
+        self.rate_limiter = rate_limiter
+        self.rate_limits = rate_limits or {}
+
+    # --- one-time-use guard --------------------------------------------------
+    async def _consume(self, token: str, ttl_seconds: int) -> bool:
+        """Mark a token consumed. Returns ``True`` on first use, ``False`` on replay."""
+        if self.token_store is None:
+            return True
+        key = hashlib.sha256(token.encode()).hexdigest()
+        if await self.token_store.exists(key):
+            return False
+        await self.token_store.create(_UsedToken(), session_id=key, expiration=ttl_seconds)
+        return True
+
+    async def _email_within_limit(self, action: str, email: str) -> bool:
+        """Per-target-email throttle. Returns ``True`` if a send is allowed.
+
+        Note:
+            Keyed on the *canonical* address so a victim can't be email-bombed
+            even from rotating IPs. Callers must treat a ``False`` result as a
+            silent no-op (don't send, don't raise) to preserve non-enumeration.
+        """
+        if self.rate_limiter is None:
+            return True
+        limit = self.rate_limits.get(action)
+        if limit is None or limit.disabled:
+            return True
+        _, limited, _ = await self.rate_limiter.increment_and_check(
+            f"email:{action}:{canonical_email(email)}", limit.times, limit.seconds, fail_open=True
+        )
+        return not limited
+
+    async def notify_existing_account(self, email: str) -> None:
+        """Tell an existing owner someone tried to register with their email.
+
+        Lets registration stay non-enumerable: the API responds identically
+        whether or not the email was already taken, and the real owner gets a
+        security heads-up.
+
+        Note:
+            Uses ``kind="existing_account"`` - a security notice, distinct from
+            the ``welcome`` template, so the adapter doesn't render a cheery
+            greeting to someone who already has an account.
+        """
+        await self.config.sender.send(
+            to=email,
+            subject=SUBJECT_EXISTING_ACCOUNT,
+            body=(
+                "Someone tried to register with this email. You already have an "
+                f"account - sign in or reset your password at {self.config.frontend_url}."
+            ),
+            kind="existing_account",
+        )
+
+    # --- email verification --------------------------------------------------
+    async def request_email_verification(self, db: AsyncSession, email: str) -> None:
+        """Send a verification link. Idempotent; never reveals account existence."""
+        if not await self._email_within_limit(VERIFY_ACTION, email):
+            return
+        user = await self.repo.get_by_email(db, email)
+        if user is None or self.repo.email_verified(user):
+            return
+        token = create_signed_token(
+            self.secret_key,
+            self.repo.user_id(user),
+            VERIFY,
+            expires_hours=self.config.verify_ttl_hours,
+            algorithm=self.algorithm,
+        )
+        await self.config.sender.send(
+            to=email,
+            subject=SUBJECT_VERIFY,
+            body=f"Verify your email: {self.config.link(self.config.verify_path, token)}",
+            kind="verify_email",
+        )
+
+    async def confirm_email_verification(self, db: AsyncSession, token: str) -> Any:
+        """Verify the signed token and mark the user's email verified (one-time-use).
+
+        Args:
+            db: Active async session.
+            token: The signed verification token from the emailed link.
+
+        Returns:
+            The verified user row.
+
+        Raises:
+            BadRequestException: If the token is invalid, expired, or already used.
+        """
+        sub = verify_signed_token(token, self.secret_key, VERIFY, algorithm=self.algorithm)
+        if sub is None:
+            raise BadRequestException("Invalid or expired token")
+        if not await self._consume(token, self.config.verify_ttl_hours * SECONDS_PER_HOUR):
+            raise BadRequestException("Token already used")
+        user = await self.repo.get_by_id(db, sub)
+        if user is None:
+            raise BadRequestException("Invalid or expired token")
+        if not self.repo.email_verified(user):
+            await self.repo.update(db, user, {"email_verified": True})
+            await self.hooks.run_after_email_verified(
+                self.repo.to_dict(user), db=db, context=HookContext()
+            )
+        return user
+
+    # --- password reset ------------------------------------------------------
+    async def request_password_reset(self, db: AsyncSession, email: str) -> None:
+        """Send a reset link. Idempotent; never reveals account existence."""
+        if not await self._email_within_limit(RESET_ACTION, email):
+            return
+        user = await self.repo.get_by_email(db, email)
+        if user is None:
+            return
+        token = create_signed_token(
+            self.secret_key,
+            self.repo.user_id(user),
+            RESET,
+            expires_hours=self.config.reset_ttl_hours,
+            algorithm=self.algorithm,
+        )
+        await self.config.sender.send(
+            to=email,
+            subject=SUBJECT_RESET,
+            body=f"Reset your password: {self.config.link(self.config.reset_path, token)}",
+            kind="reset_password",
+        )
+
+    async def reset_password(self, db: AsyncSession, token: str, new_password: str) -> Any:
+        """Reset the password and evict the user's other sessions.
+
+        Args:
+            db: Active async session.
+            token: The signed reset token from the emailed link.
+            new_password: The new plaintext password (hashed before storage).
+
+        Returns:
+            The updated user row.
+
+        Raises:
+            BadRequestException: If the token is invalid, expired, or already used.
+
+        Note:
+            Terminating the user's other sessions is attacker-eviction: a reset
+            often follows a compromise, so any session an attacker holds dies
+            with it.
+        """
+        sub = verify_signed_token(token, self.secret_key, RESET, algorithm=self.algorithm)
+        if sub is None:
+            raise BadRequestException("Invalid or expired token")
+        if not await self._consume(token, self.config.reset_ttl_hours * SECONDS_PER_HOUR):
+            raise BadRequestException("Token already used")
+        user = await self.repo.get_by_id(db, sub)
+        if user is None:
+            raise BadRequestException("Invalid or expired token")
+        await self.repo.update(db, user, {"hashed_password": get_password_hash(new_password)})
+        if self.session_manager is not None:
+            await self.session_manager.terminate_all_user_sessions(
+                self.repo.user_id(user), reason="password_reset"
+            )
+        await self.hooks.run_after_password_reset(
+            self.repo.to_dict(user), db=db, context=HookContext()
+        )
+        return user
+
+    # --- email change --------------------------------------------------------
+    async def request_email_change(
+        self, db: AsyncSession, user: Any, new_email: str, password: str
+    ) -> None:
+        """Send a confirmation link to the proposed new address.
+
+        Note:
+            Requires the current password as re-auth. OAuth-only accounts hold
+            the unusable-password sentinel and therefore cannot use this flow as
+            written - give them a password first (a "set password" flow) or wire
+            a provider re-auth path before exposing email change to them.
+
+        Note:
+            Availability is checked best-effort and idempotently: if the address
+            is already taken the token is silently skipped, so the response can't
+            be used to probe which emails exist.
+        """
+        if not verify_password(password, self.repo.get(user, "hashed_password", "")):
+            raise BadRequestException("Incorrect password")
+        new_email_c = canonical_email(new_email)
+        if new_email_c == canonical_email(self.repo.get(user, "email")):
+            raise BadRequestException("New email matches current email")
+        if not await self._email_within_limit(CHANGE_ACTION, new_email_c):
+            return
+        if await self.repo.get_by_email(db, new_email_c) is None:
+            token = create_signed_token(
+                self.secret_key,
+                self.repo.user_id(user),
+                CHANGE,
+                expires_hours=self.config.change_ttl_hours,
+                algorithm=self.algorithm,
+                extra_claims={"new_email": new_email_c},
+            )
+            await self.config.sender.send(
+                to=new_email_c,
+                subject=SUBJECT_CHANGE,
+                body=f"Confirm your new email: {self.config.link(self.config.change_path, token)}",
+                kind="change_email",
+            )
+
+    async def confirm_email_change(self, db: AsyncSession, token: str) -> Any:
+        """Apply a confirmed email change.
+
+        Note:
+            Availability is re-checked before consuming the token so a token
+            isn't burned when the address was taken in the meantime - but that
+            check is best-effort: the DB unique constraint is the real backstop.
+            A concurrent confirm to the same address surfaces as ``IntegrityError``,
+            which is caught and surfaced as a clean duplicate error.
+        """
+        payload = verify_signed_token_full(token, self.secret_key, CHANGE, algorithm=self.algorithm)
+        if payload is None:
+            raise BadRequestException("Invalid or expired token")
+        new_email = canonical_email(payload.get("new_email"))
+        if not new_email:
+            raise BadRequestException("Invalid token")
+        if await self.repo.get_by_email(db, new_email) is not None:
+            raise DuplicateValueException("Email already in use")
+        user = await self.repo.get_by_id(db, payload["sub"])
+        if user is None:
+            raise BadRequestException("Invalid or expired token")
+        if not await self._consume(token, self.config.change_ttl_hours * SECONDS_PER_HOUR):
+            raise BadRequestException("Token already used")
+        try:
+            await self.repo.update(db, user, {"email": new_email})
+        except IntegrityError as exc:
+            await db.rollback()
+            raise DuplicateValueException("Email already in use") from exc
+        await self.hooks.run_after_email_changed(
+            self.repo.to_dict(user), db=db, context=HookContext()
+        )
+        return user

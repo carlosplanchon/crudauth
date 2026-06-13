@@ -1,19 +1,71 @@
 [project]
 name = "crudauth"
-version = "0.0.1"
-description = "Authentication for FastAPI."
+version = "0.1.0"
+description = "Batteries-included, transport-agnostic authentication for FastAPI."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
-    { name = "Igor Benav", email = "igor.magalhaes.r@gmail.com" }
+    { name = "Igor Benav", email = "igor@benav.io" }
 ]
 requires-python = ">=3.10"
-dependencies = []
+keywords = ["fastapi", "auth", "authentication", "sessions", "jwt", "oauth", "sqlalchemy"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Framework :: FastAPI",
+    "Typing :: Typed",
+]
+dependencies = [
+    "fastapi>=0.100.0",
+    "SQLAlchemy>=2.0.0,<3",
+    "pydantic>=2.0.0,<3",
+    "PyJWT>=2.8.0",
+    "bcrypt>=4.0.0",
+    "python-multipart>=0.0.7",
+    "email-validator>=2.0.0",
+]
+
+[project.optional-dependencies]
+oauth = ["httpx>=0.24.0"]
+redis = ["redis>=5.0.0"]
+useragent = ["user-agents>=2.2.0"]
+all = ["httpx>=0.24.0", "redis>=5.0.0", "user-agents>=2.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/benavlabs/crudauth"
+Repository = "https://github.com/benavlabs/crudauth"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "aiosqlite>=0.19.0",
+    "greenlet>=3.0.0",
+    "httpx>=0.24.0",
+    "redis>=5.0.0",
+    "user-agents>=2.2.0",
+    "fakeredis>=2.20.0",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.10.11,<0.11.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

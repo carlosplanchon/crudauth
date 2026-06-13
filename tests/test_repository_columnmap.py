@@ -1,0 +1,74 @@
+"""Repository behavior under column_map (review fixes #1 canonicalization, #8 alias gate)."""
+
+from __future__ import annotations
+
+import pytest
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from crudauth.repository import UserRepository
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Account(Base):
+    __tablename__ = "accounts"
+
+    account_id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    email_address: Mapped[str] = mapped_column(unique=True)
+    username: Mapped[str] = mapped_column(unique=True)
+    pw_hash: Mapped[str] = mapped_column()
+    is_admin: Mapped[bool] = mapped_column(default=False)
+
+
+COLUMN_MAP = {
+    "id": "account_id",
+    "email": "email_address",
+    "hashed_password": "pw_hash",
+    "is_superuser": "is_admin",
+}
+
+
+@pytest.fixture
+async def session():
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    maker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with maker() as s:
+        yield s
+    await engine.dispose()
+
+
+# --- #1: create() canonicalizes the *resolved* email column ------------------
+async def test_create_canonicalizes_email_under_column_map(session) -> None:
+    repo = UserRepository(Account, column_map=COLUMN_MAP)
+    user = await repo.create(
+        session,
+        {"email": "  Foo@X.COM ", "username": "foo", "hashed_password": "h"},
+    )
+    # stored normalized despite email being mapped to `email_address`
+    assert user.email_address == "foo@x.com"
+    # and the OAuth-link / password-login lookup finds it case-insensitively
+    found = await repo.get_by_email(session, "FOO@x.com")
+    assert found is not None
+    assert repo.user_id(found) == repo.user_id(user)
+
+
+# --- #8: a column_map alias of a gated field is still dropped at registration -
+def test_filter_registration_data_closes_alias_hole() -> None:
+    repo = UserRepository(Account, column_map=COLUMN_MAP)
+    # `is_admin` is the mapped column name of the gated logical `is_superuser`
+    out = repo.filter_registration_data(
+        {"email": "a@x.com", "username": "a", "is_admin": True, "full_name": "ok"}
+    )
+    assert "is_admin" not in out  # gated by resolved column name
+    assert out == {"email": "a@x.com", "username": "a", "full_name": "ok"}
+
+
+def test_gated_register_fields_flags_alias() -> None:
+    repo = UserRepository(Account, column_map=COLUMN_MAP)
+    # a register schema declaring the mapped name is flagged at startup
+    assert repo.gated_register_fields(["email", "username", "is_admin"]) == {"is_admin"}

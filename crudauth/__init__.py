@@ -1,0 +1,60 @@
+"""crudauth - batteries-included, transport-agnostic authentication for FastAPI.
+
+Quickstart:
+    ```python
+    from crudauth import CRUDAuth, Principal
+
+    auth = CRUDAuth(session=get_session, user_model=User, SECRET_KEY="change-me")
+    app.include_router(auth.router)
+
+    @app.get("/me")
+    async def me(user: Principal = Depends(auth.current_user())):
+        return {"id": user.user_id}
+    ```
+"""
+
+from __future__ import annotations
+
+from .core import AuthContext, CookieConfig, Transport
+from .email import EmailConfig, EmailSender
+from .exceptions import (
+    BadRequestException,
+    CSRFException,
+    DuplicateValueException,
+    ForbiddenException,
+    NotFoundException,
+    RateLimitException,
+    UnauthorizedException,
+    UnprocessableEntityException,
+)
+from .crud_auth import CRUDAuth
+from .hooks import AuthHooks, HookContext
+from .oauth import OAuthCredentials
+from .principal import Principal
+from .transports import BearerTransport, SessionTransport
+
+__version__ = "0.1.0"
+
+__all__ = [
+    "CRUDAuth",
+    "Principal",
+    "SessionTransport",
+    "BearerTransport",
+    "OAuthCredentials",
+    "EmailConfig",
+    "EmailSender",
+    "AuthHooks",
+    "HookContext",
+    "Transport",
+    "AuthContext",
+    "CookieConfig",
+    # exceptions
+    "BadRequestException",
+    "NotFoundException",
+    "ForbiddenException",
+    "UnauthorizedException",
+    "UnprocessableEntityException",
+    "DuplicateValueException",
+    "RateLimitException",
+    "CSRFException",
+]

@@ -1,0 +1,550 @@
+"""``CRUDAuth`` - the one object you configure and mount.
+
+```python
+auth = CRUDAuth(session=get_session, user_model=User, SECRET_KEY="...")
+app.include_router(auth.router)
+
+@app.get("/me")
+async def me(user: Principal = Depends(auth.current_user())):
+    return {"id": user.user_id}
+```
+"""
+
+import inspect
+import logging
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Sequence
+
+from fastapi import APIRouter, Depends, Request, Response
+from pydantic import BaseModel
+
+from ._register import build_register_route
+from .constants import (
+    DEFAULT_ALGORITHM,
+    DEFAULT_LOGIN_ATTEMPT_WINDOW_SECONDS,
+    DEFAULT_LOGIN_LOCKOUT_BASE_SECONDS,
+    DEFAULT_LOGIN_LOCKOUT_MAX_SECONDS,
+    DEFAULT_LOGIN_MAX_ATTEMPTS,
+    OAUTH_STATE_TTL_SECONDS,
+    USED_TOKEN_TTL_SECONDS,
+)
+from .core import AuthContext, AuthRuntime, CookieConfig, Transport
+from .email.router import build_email_router
+from .email.service import EmailFlowService
+from .exceptions import ForbiddenException, RateLimitException, UnauthorizedException
+from .hooks import AuthHooks
+from .oauth import OAuthAccountService, OAuthProviderFactory
+from .oauth.router import build_oauth_router
+from .principal import Principal
+from .ratelimit import (
+    DEFAULT_RATE_LIMITS,
+    KeyBy,
+    LockoutPolicy,
+    MemoryRateLimiterBackend,
+    RateLimit,
+)
+from .ratelimit.constants import RATE_LIMIT_NAMESPACE
+from .repository import REGISTRATION_ALLOWED_FIELDS, UserRepository
+from .storage import get_session_storage
+from .transports.bearer.transport import BearerTransport
+from .transports.session.transport import SessionTransport
+from .utils import get_client_ip
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .ratelimit import RateLimiterBackend
+    from .storage.base import AbstractSessionStorage
+
+logger = logging.getLogger("crudauth")
+
+__all__ = ["CRUDAuth"]
+
+
+class CRUDAuth:
+    """Composition root: configure transports, mount routers, gate routes.
+
+    Construct one per auth surface. It owns the user repository, the shared
+    [AuthRuntime][crudauth.core.AuthRuntime], the rate-limiter backend, and the
+    assembled routers. Session auth is the default; add bearer/oauth/email by
+    passing ``transports=``, ``oauth=``, ``email=``.
+
+    Example:
+        ```python
+        auth = CRUDAuth(session=get_session, user_model=User, SECRET_KEY="change-me")
+        app.include_router(auth.router)
+
+        @app.get("/me")
+        async def me(user: Principal = Depends(auth.current_user())):
+            return {"id": user.user_id}
+        ```
+    """
+
+    def __init__(
+        self,
+        *,
+        session: Callable[..., Any],
+        user_model: type[Any],
+        SECRET_KEY: str,
+        transports: Sequence[Transport] | None = None,
+        column_map: dict[str, str] | None = None,
+        oauth: dict[str, Any] | None = None,
+        email: Any = None,
+        hooks: AuthHooks | None = None,
+        redirect_base_url: str | None = None,
+        algorithm: str = DEFAULT_ALGORITHM,
+        cookies: CookieConfig | None = None,
+        register_schema: type[BaseModel] | None = None,
+        rate_limiter: "RateLimiterBackend | None" = None,
+        rate_limits: dict[str, RateLimit] | None = None,
+    ):
+        """Configure the auth surface.
+
+        Args:
+            session: FastAPI dependency that yields an ``AsyncSession`` (your
+                ``get_session``); every route and the ``current_user`` dependency
+                acquire the DB through it.
+            user_model: Your SQLAlchemy user model (typically inheriting
+                [AuthUserMixin][crudauth.models.mixin.AuthUserMixin]).
+            SECRET_KEY: Secret used to sign session/JWT and email tokens.
+            transports: Ordered auth channels to enable; defaults to a single
+                [SessionTransport][crudauth.transports.session.transport.SessionTransport]. Order is the first-wins precedence.
+            column_map: Maps crudauth logical field names to your model's actual
+                column names when they differ (e.g. ``{"hashed_password": "pw_hash"}``).
+            oauth: ``{provider_name: OAuthCredentials}`` to enable OAuth login;
+                requires ``redirect_base_url`` and a session transport.
+            email: An [EmailConfig][crudauth.email.config.EmailConfig] to enable verify/reset/change
+                flows; ``None`` disables them.
+            hooks: Lifecycle callbacks ([AuthHooks][crudauth.hooks.AuthHooks]).
+            redirect_base_url: Public base URL used to build OAuth redirect URIs
+                and the post-login redirect default.
+            algorithm: JWT signing algorithm (default ``"HS256"``).
+            cookies: App-wide [CookieConfig][crudauth.core.CookieConfig] (``secure`` /
+                ``samesite`` / ``path``); transports may override per-instance.
+            register_schema: Custom Pydantic body for ``/register``; extra
+                non-privileged columns are persisted, privileged ones dropped.
+            rate_limiter: Backend for lockout/throttles; defaults to an in-process
+                [MemoryRateLimiterBackend][crudauth.ratelimit.backends.memory.MemoryRateLimiterBackend]. Use
+                ``redis_rate_limiter(...)`` in production.
+            rate_limits: Per-action overrides merged over
+                :data:`~crudauth.ratelimit.DEFAULT_RATE_LIMITS`.
+
+        Raises:
+            ValueError: If ``SECRET_KEY`` is empty, or ``oauth`` is set without a
+                session transport / ``redirect_base_url``.
+        """
+        if not SECRET_KEY:
+            raise ValueError("SECRET_KEY is required")
+        self.session = session
+        self.repo = UserRepository(user_model, column_map)
+        self.hooks = hooks or AuthHooks()
+        self.transports: list[Transport] = list(transports) if transports else [SessionTransport()]
+        self._register_schema = register_schema
+        self._warn_on_privileged_register_fields(register_schema)
+        self._rate_limits: dict[str, RateLimit] = {**DEFAULT_RATE_LIMITS, **(rate_limits or {})}
+
+        self.runtime = AuthRuntime(
+            secret_key=SECRET_KEY,
+            repo=self.repo,
+            hooks=self.hooks,
+            redirect_base_url=redirect_base_url,
+            db_dependency=session,
+            algorithm=algorithm,
+            cookie_config=cookies or CookieConfig(),
+            rate_limiter=rate_limiter or MemoryRateLimiterBackend(),
+        )
+        self._session_transport = next(
+            (t for t in self.transports if isinstance(t, SessionTransport)), None
+        )
+        self.runtime.lockout = self._build_lockout(self._session_transport)
+        for transport in self.transports:
+            transport.bind(self.runtime)
+
+        self._email_service: EmailFlowService | None = None
+        self._email_token_store: AbstractSessionStorage[Any] | None = None
+        if email is not None:
+            self._build_email(email, algorithm)
+
+        self._oauth_router: APIRouter | None = None
+        self._oauth_state_storage: AbstractSessionStorage[Any] | None = None
+        if oauth:
+            self._build_oauth(oauth, redirect_base_url)
+
+    def _build_lockout(
+        self, session_transport: "SessionTransport | None"
+    ) -> "LockoutPolicy | None":
+        """Build the one shared login-lockout policy (or ``None`` if no limiter).
+
+        Note:
+            Called before transports are bound, because both the session and
+            bearer transports read ``runtime.lockout`` in their ``bind``/routes.
+            Mirrors the session transport's lockout config when present, else
+            uses defaults - so a bearer-only API still gets lockout.
+        """
+        if self.runtime.rate_limiter is None:
+            return None
+        st = session_transport
+        return LockoutPolicy(
+            self.runtime.rate_limiter,
+            max_attempts=st.login_max_attempts if st else DEFAULT_LOGIN_MAX_ATTEMPTS,
+            attempt_window_seconds=(
+                st.login_attempt_window_seconds if st else DEFAULT_LOGIN_ATTEMPT_WINDOW_SECONDS
+            ),
+            lockout_base_seconds=(
+                st.login_lockout_base_seconds if st else DEFAULT_LOGIN_LOCKOUT_BASE_SECONDS
+            ),
+            lockout_max_seconds=(
+                st.login_lockout_max_seconds if st else DEFAULT_LOGIN_LOCKOUT_MAX_SECONDS
+            ),
+            fail_open=False,
+        )
+
+    def _warn_on_privileged_register_fields(self, schema: type[BaseModel] | None) -> None:
+        """Warn loudly when a custom register schema declares a gated field.
+
+        The field is still dropped at runtime (silently, so a prober learns
+        nothing) - but a schema declaring ``is_superuser`` is a developer
+        misconfiguration worth surfacing at startup.
+        """
+        if schema is None:
+            return
+        gated = self.repo.gated_register_fields(schema.model_fields.keys())
+        if gated:
+            logger.warning(
+                "register_schema %s declares privileged field(s) %s that registration "
+                "will ignore. /register may only set %s plus your own non-privileged "
+                "columns; remove these from the schema.",
+                schema.__name__,
+                sorted(gated),
+                sorted(REGISTRATION_ALLOWED_FIELDS),
+            )
+
+    # --- backend detection ---------------------------------------------------
+    def _backend_config(self) -> tuple[str, str | None]:
+        if self._session_transport is not None:
+            return self._session_transport.backend, self._session_transport.redis_url
+        return "memory", None
+
+    # --- public: session manager --------------------------------------------
+    @property
+    def sessions(self):
+        """The [SessionManager][crudauth.transports.session.manager.SessionManager] of the configured session transport."""
+        if self._session_transport is None or self._session_transport.manager is None:
+            raise RuntimeError(
+                "Session management requires a SessionTransport in transports=[...]."
+            )
+        return self._session_transport.manager
+
+    # --- email wiring --------------------------------------------------------
+    def _build_email(self, email: Any, algorithm: str) -> None:
+        backend, redis_url = self._backend_config()
+        token_store = get_session_storage(
+            backend, prefix="used_token:", expiration=USED_TOKEN_TTL_SECONDS, redis_url=redis_url
+        )
+        self._email_token_store = token_store
+        self._email_service = EmailFlowService(
+            repo=self.repo,
+            secret_key=self.runtime.secret_key,
+            config=email,
+            hooks=self.hooks,
+            algorithm=algorithm,
+            token_store=token_store,
+            session_manager=self.sessions if self._session_transport else None,
+            rate_limiter=self.runtime.rate_limiter,
+            rate_limits=self._rate_limits,
+        )
+        self.runtime.email_service = self._email_service
+
+    # --- oauth wiring --------------------------------------------------------
+    def _build_oauth(self, oauth: dict[str, Any], redirect_base_url: str | None) -> None:
+        if self._session_transport is None:
+            raise ValueError(
+                "OAuth establishes a session on callback; add a SessionTransport to transports=[...]."
+            )
+        if not redirect_base_url:
+            raise ValueError("redirect_base_url is required when oauth=... is configured")
+
+        providers = {}
+        for name, creds in oauth.items():
+            redirect_uri = f"{redirect_base_url.rstrip('/')}/oauth/{name}/callback"
+            providers[name] = OAuthProviderFactory.create_provider(
+                name,
+                client_id=creds.client_id,
+                client_secret=creds.client_secret,
+                redirect_uri=redirect_uri,
+                scopes=creds.scopes,
+            )
+
+        backend, redis_url = self._backend_config()
+        state_storage = get_session_storage(
+            backend, prefix="oauth_state:", expiration=OAUTH_STATE_TTL_SECONDS, redis_url=redis_url
+        )
+        self._oauth_state_storage = state_storage
+        self._oauth_router = build_oauth_router(
+            runtime=self.runtime,
+            providers=providers,
+            state_storage=state_storage,
+            account_service=OAuthAccountService(self.repo),
+            session_manager=self.sessions,
+            default_redirect=redirect_base_url,
+        )
+
+    # --- the current_user() factory -----------------------------------------
+    def current_user(
+        self,
+        *,
+        optional: bool = False,
+        superuser: bool = False,
+        verified: bool = False,
+        scopes: list[str] | None = None,
+        transport: str | list[str] | None = None,
+        check: Callable[[Principal], Any] | None = None,
+    ) -> Callable[..., Any]:
+        """Build a FastAPI dependency that authenticates and authorizes a request.
+
+        Every gate is a keyword: ``optional``, ``superuser``, ``verified``,
+        ``scopes``, ``transport`` (narrow to one/some transports), and ``check``
+        (an extra predicate run last, receiving the resolved principal).
+
+        Note:
+            Transports are tried in order, first credential wins. A transport
+            returns ``None`` when its credential is *absent* (move to the next),
+            but RAISES for a *present-but-invalid* one (e.g. a session cookie that
+            fails the CSRF header check on a mutation). That hard-fail propagates
+            even under ``optional=True`` - a tampered credential is an attack
+            signal, not "treat me as anonymous".
+
+        Returns:
+            An async dependency yielding the [Principal][crudauth.principal.Principal] (or ``None`` when
+            ``optional`` and no credential is present).
+
+        Example:
+            ```python
+            @app.get("/admin")
+            async def admin(_: Principal = Depends(auth.current_user(superuser=True))):
+                ...
+            ```
+        """
+        selected = self._select_transports(transport)
+        required_scopes = list(scopes or [])
+
+        async def dependency(
+            request: Request, db: Annotated[Any, Depends(self.session)]
+        ) -> Principal | None:
+            ctx = AuthContext(request=request, db=db, runtime=self.runtime)
+            principal: Principal | None = None
+            for t in selected:
+                principal = await t.authenticate(request, ctx)
+                if principal is not None:
+                    break
+
+            if principal is None:
+                if optional:
+                    return None
+                raise UnauthorizedException("Not authenticated")
+
+            if superuser and not principal.is_superuser:
+                raise ForbiddenException("Insufficient privileges")
+            if verified and not principal.email_verified:
+                raise ForbiddenException("Email not verified")
+            if required_scopes and not principal.has_scopes(required_scopes):
+                raise ForbiddenException("Insufficient scope")
+            if check is not None:
+                result = check(principal)
+                if inspect.isawaitable(result):
+                    await result
+            return principal
+
+        return dependency
+
+    def _select_transports(self, transport: str | list[str] | None) -> list[Transport]:
+        if transport is None:
+            return self.transports
+        names = [transport] if isinstance(transport, str) else list(transport)
+        selected = [t for t in self.transports if t.name in names]
+        if not selected:
+            raise ValueError(
+                f"No configured transport matches {names!r}; "
+                f"configured: {[t.name for t in self.transports]}"
+            )
+        return selected
+
+    # --- the rate_limit() factory -------------------------------------------
+    def rate_limit(
+        self,
+        action: str,
+        limit: RateLimit | None = None,
+        *,
+        key: "KeyBy | Callable[[Request], str]" = KeyBy.IP,
+    ) -> Callable[..., Any]:
+        """Build a FastAPI dependency that throttles an endpoint.
+
+        Resolves the limit (explicit ``limit`` → ``rate_limits=`` override →
+        :data:`~crudauth.ratelimit.DEFAULT_RATE_LIMITS`), keys by IP, user, or a
+        custom function, writes ``X-RateLimit-*`` headers, and raises
+        [RateLimitException][crudauth.exceptions.RateLimitException] (429) when the caller exceeds the window.
+
+        Example:
+            ```python
+            @app.post("/contact", dependencies=[Depends(auth.rate_limit("contact", RateLimit(5, 60)))])
+            async def contact(...): ...
+            ```
+        """
+        resolved = limit or self._rate_limits.get(action) or DEFAULT_RATE_LIMITS.get(action)
+        if resolved is None:
+            raise ValueError(
+                f"No rate limit configured for action {action!r}; pass limit=RateLimit(...)."
+            )
+
+        if key is KeyBy.USER:
+            user_dep = self.current_user()
+
+            async def by_user(
+                response: Response, principal: Annotated[Principal, Depends(user_dep)]
+            ) -> None:
+                await self._apply_rate_limit(response, action, str(principal.user_id), resolved)
+
+            return by_user
+
+        if key is KeyBy.IP:
+
+            async def by_ip(request: Request, response: Response) -> None:
+                await self._apply_rate_limit(response, action, get_client_ip(request), resolved)
+
+            return by_ip
+
+        keyfn = key
+
+        async def by_custom(request: Request, response: Response) -> None:
+            await self._apply_rate_limit(response, action, keyfn(request), resolved)
+
+        return by_custom
+
+    async def _apply_rate_limit(
+        self, response: Response, action: str, ident: str, limit: RateLimit
+    ) -> None:
+        """Run the window check, set ``X-RateLimit-*`` headers, raise 429 if over.
+
+        Note:
+            Headers set on the injected ``Response`` are dropped when the
+            dependency raises, so the limit headers are also attached to the
+            ``RateLimitException`` on the over-limit path.
+        """
+        backend = self.runtime.rate_limiter
+        if backend is None or limit.disabled:
+            return
+        count, limited, retry_after = await backend.increment_and_check(
+            f"{RATE_LIMIT_NAMESPACE}:{action}:{ident}", limit.times, limit.seconds, fail_open=True
+        )
+        response.headers["X-RateLimit-Limit"] = str(limit.times)
+        response.headers["X-RateLimit-Remaining"] = str(max(0, limit.times - count))
+        if limited:
+            raise RateLimitException(
+                "Too many requests. Try again later.",
+                retry_after=retry_after,
+                headers={
+                    "X-RateLimit-Limit": str(limit.times),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
+
+    # --- shared routes -------------------------------------------------------
+    def _shared_router(self) -> APIRouter:
+        router = APIRouter(tags=["auth"])
+        router.include_router(build_register_route(self, self._register_schema))
+
+        @router.get("/me")
+        async def me(user: Annotated[Principal, Depends(self.current_user())]):
+            """Return the authenticated user's identity, scopes, and auth transport."""
+            return {
+                "user_id": user.user_id,
+                "username": self.repo.get(user.user, "username") if user.user else None,
+                "email": self.repo.get(user.user, "email") if user.user else None,
+                "is_superuser": user.is_superuser,
+                "scopes": list(user.scopes),
+                "via": user.transport,
+            }
+
+        return router
+
+    # --- assembled routers ---------------------------------------------------
+    @property
+    def router(self) -> APIRouter:
+        """The full router to mount: shared (``/register``, ``/me``) plus every
+        transport's routes, plus OAuth and email routes when configured.
+
+        Returns:
+            An `APIRouter` to pass to ``app.include_router``.
+
+        Example:
+            ```python
+            app.include_router(auth.router)
+            ```
+        """
+        router = APIRouter()
+        router.include_router(self._shared_router())
+        for t in self.transports:
+            sub = t.contributes_routes()
+            if sub is not None:
+                router.include_router(sub)
+        if self._oauth_router is not None:
+            router.include_router(self._oauth_router)
+        if self._email_service is not None:
+            router.include_router(build_email_router(auth=self, service=self._email_service))
+        return router
+
+    @property
+    def session_router(self) -> APIRouter:
+        """Only the session transport's routes (``/login``, ``/logout``).
+
+        Raises:
+            RuntimeError: If no [SessionTransport][crudauth.transports.session.transport.SessionTransport] is configured.
+        """
+        if self._session_transport is None:
+            raise RuntimeError("No SessionTransport configured")
+        return self._session_transport.contributes_routes()
+
+    @property
+    def bearer_router(self) -> APIRouter:
+        """Only the bearer transport's routes (``/token``, ``/refresh``).
+
+        Raises:
+            RuntimeError: If no [BearerTransport][crudauth.transports.bearer.transport.BearerTransport] is configured.
+        """
+        bearer = next((t for t in self.transports if isinstance(t, BearerTransport)), None)
+        if bearer is None:
+            raise RuntimeError("No BearerTransport configured")
+        return bearer.contributes_routes()
+
+    # --- lifecycle -----------------------------------------------------------
+    async def initialize(self) -> None:
+        """Open storage/limiter connections; call from your app's lifespan startup.
+
+        Idempotent per component. Required for server-side backends (redis); a
+        no-op for the in-memory defaults.
+
+        Example:
+            ```python
+            @asynccontextmanager
+            async def lifespan(app):
+                await auth.initialize()
+                yield
+                await auth.shutdown()
+            ```
+        """
+        if self.runtime.rate_limiter is not None:
+            await self.runtime.rate_limiter.initialize()
+        for t in self.transports:
+            await t.initialize()
+        if self._oauth_state_storage is not None:
+            await self._oauth_state_storage.initialize()
+        if self._email_token_store is not None:
+            await self._email_token_store.initialize()
+
+    async def shutdown(self) -> None:
+        """Close connections. Call in lifespan teardown."""
+        for t in self.transports:
+            await t.shutdown()
+        if self._oauth_state_storage is not None:
+            await self._oauth_state_storage.close()
+        if self._email_token_store is not None:
+            await self._email_token_store.close()
+        if self.runtime.rate_limiter is not None:
+            await self.runtime.rate_limiter.close()
