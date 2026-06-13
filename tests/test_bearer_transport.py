@@ -101,7 +101,7 @@ async def test_scope_missing_403(client) -> None:
 
 
 async def test_token_shares_lockout_with_login(get_session, UserModel) -> None:
-    # #1: /token must not be a lockout bypass - it shares the counter with /login.
+    # /token must not be a lockout bypass - it shares the counter with /login.
     auth = CRUDAuth(
         session=get_session,
         user_model=UserModel,

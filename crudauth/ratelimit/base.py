@@ -3,7 +3,7 @@
 The *required* surface is a dumb counter - five abstract methods plus an
 overridable ``get_ttl``. The fixed-window check ([increment_and_check][crudauth.ratelimit.base.RateLimiterBackend.increment_and_check])
 is provided once on the base class over that counter, so a third backend is a
-handful of trivial methods, not a window-math reimplementation (Convention 15).
+handful of trivial methods, not a window-math reimplementation.
 """
 
 from __future__ import annotations

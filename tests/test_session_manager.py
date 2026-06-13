@@ -102,7 +102,7 @@ async def test_memory_storage_crud() -> None:
 
 
 async def test_minimal_backend_degrades_gracefully() -> None:
-    # #4: a BYO backend that implements only the core surface (no
+    # a BYO backend that implements only the core surface (no
     # get_user_sessions / scan_keys) must degrade - not crash - disabling
     # multi-device listing and the idle sweep rather than raising.
     from crudauth.storage.base import AbstractSessionStorage

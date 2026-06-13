@@ -69,7 +69,7 @@ async def test_get_user_sessions(storage) -> None:
 
 
 async def test_delete_with_user_id_updates_index(storage) -> None:
-    # #2: passing user_id lets delete drop the session from the user index
+    # passing user_id lets delete drop the session from the user index
     # without re-reading the record; the index stays consistent.
     await storage.create(SessionData(user_id=7), session_id="a")
     await storage.create(SessionData(user_id=7), session_id="b")

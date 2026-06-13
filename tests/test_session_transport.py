@@ -153,7 +153,7 @@ async def test_login_lockout_returns_429(get_session, UserModel) -> None:
 
 async def test_login_lockout_not_bypassable_by_email_case(get_session, UserModel) -> None:
     # Case variants of one email must collapse to a single lockout key, so an
-    # attacker can't reset the per-user counter by varying case (Finding 3).
+    # attacker can't reset the per-user counter by varying case.
     auth = CRUDAuth(
         session=get_session,
         user_model=UserModel,

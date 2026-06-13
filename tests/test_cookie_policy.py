@@ -1,4 +1,4 @@
-"""One cookie policy: session and bearer agree on secure/samesite (ledger #9)."""
+"""One cookie policy: session and bearer agree on secure/samesite."""
 
 from __future__ import annotations
 

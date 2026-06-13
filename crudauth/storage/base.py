@@ -138,8 +138,8 @@ class AbstractSessionStorage(ABC, Generic[T]):
 
     async def delete_pattern(self, pattern: str) -> int:
         """Optional: delete keys by prefix. Raises `NotImplementedError`
-        when unsupported. Never point this at the ``login:*`` lockout keys
-        (Convention 9)."""
+        when unsupported. Never point this at the ``login:*`` lockout keys -
+        bulk-deleting them would clear an attacker's accumulated failures."""
         raise NotImplementedError
 
     async def initialize(self) -> None:

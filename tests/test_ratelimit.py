@@ -59,7 +59,7 @@ async def test_ping(backend) -> None:
 
 
 async def test_memory_backend_evicts_abandoned_window_keys() -> None:
-    # #1: rolling window-stamped keys are never re-touched; the periodic sweep
+    # rolling window-stamped keys are never re-touched; the periodic sweep
     # must evict them so a high-cardinality keyspace can't grow unbounded.
     import time as _time
 

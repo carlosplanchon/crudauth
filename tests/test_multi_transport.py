@@ -83,7 +83,7 @@ async def test_narrow_to_bearer_ignores_session(get_session, UserModel) -> None:
 
 
 async def test_bearer_first_invalid_token_hard_fails(get_session, UserModel) -> None:
-    # #3 / convention 6: an invalid bearer token is a present-but-invalid credential,
+    # an invalid bearer token is a present-but-invalid credential,
     # so when bearer runs first it hard-fails (401) rather than falling through to
     # the valid session cookie.
     app, auth = build_app(get_session, UserModel, session_first=False)

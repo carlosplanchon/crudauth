@@ -31,7 +31,7 @@ from crudauth.utils import get_password_hash
 
 
 # =============================================================================
-# #1 - user_id type contract: JWT 'sub' is a string; get_by_id must coerce to PK
+# user_id type contract: JWT 'sub' is a string; get_by_id must coerce to PK
 # =============================================================================
 async def test_get_by_id_coerces_string_sub_to_int_pk(sessionmaker, UserModel) -> None:
     repo = UserRepository(UserModel)
@@ -84,12 +84,12 @@ async def test_bearer_and_email_flow_use_consistent_id_type(sessionmaker, UserMo
 
 
 # =============================================================================
-# #2 - remember_me cookie lifetime tracks the server-side window
+# remember_me cookie lifetime tracks the server-side window
 # =============================================================================
 async def test_session_cookie_is_session_scoped_remember_me_is_persistent(
     get_session, UserModel
 ) -> None:
-    # #2 fix: a non-remember login emits a SESSION cookie (no Max-Age) so the
+    # a non-remember login emits a SESSION cookie (no Max-Age) so the
     # server-side sliding idle check is the real expiry; remember-me emits a
     # persistent cookie with a long Max-Age.
     auth = CRUDAuth(
@@ -133,7 +133,7 @@ def _cookie_max_age(response, name) -> int | None:
 
 
 # =============================================================================
-# #3 / #4 - OAuth: email required; unverified email is not auto-linked
+# OAuth: email required; unverified email is not auto-linked
 # =============================================================================
 class _Stub(AbstractOAuthProvider):
     def __init__(self, *a, info=None, **k):
@@ -206,7 +206,7 @@ async def test_oauth_verified_email_links(sessionmaker, UserModel) -> None:
 
 
 # =============================================================================
-# #5 - open redirect is neutralized
+# open redirect is neutralized
 # =============================================================================
 class StubRedirectProvider(AbstractOAuthProvider):
     def __init__(self, client_id, client_secret, redirect_uri, scopes=None):
@@ -262,7 +262,7 @@ async def test_open_redirect_blocked(get_session, UserModel) -> None:
 
 
 # =============================================================================
-# #6 - cleanup sweep does NOT wipe login-lockout state
+# cleanup sweep does NOT wipe login-lockout state
 # =============================================================================
 async def test_cleanup_preserves_lockout() -> None:
     from crudauth.storage import get_session_storage
@@ -285,7 +285,7 @@ async def test_cleanup_preserves_lockout() -> None:
 
 
 # =============================================================================
-# #7 - CSRF token slides forward with session activity
+# CSRF token slides forward with session activity
 # =============================================================================
 async def test_csrf_renews_with_session_activity() -> None:
     from starlette.requests import Request
@@ -311,7 +311,7 @@ async def test_csrf_renews_with_session_activity() -> None:
 
 
 # =============================================================================
-# #8 - register is non-enumerating when email is configured; and is throttled
+# register is non-enumerating when email is configured; and is throttled
 # =============================================================================
 class _Capture(EmailSender):
     def __init__(self) -> None:
@@ -345,7 +345,7 @@ async def test_register_does_not_leak_existing_email(get_session, UserModel) -> 
         )
     await auth.shutdown()
     # New-email and existing-email responses are byte-identical (status + body),
-    # so registration reveals nothing about which emails exist (Convention 12).
+    # so registration reveals nothing about which emails exist.
     assert r1.status_code == 202
     assert r2.status_code == 202
     assert r1.json() == r2.json()
@@ -378,7 +378,7 @@ async def test_register_throttled(get_session, UserModel) -> None:
 
 
 # =============================================================================
-# #10 - confirm_email_change keeps the token if the target became taken
+# confirm_email_change keeps the token if the target became taken
 # =============================================================================
 async def test_email_change_token_survives_race(sessionmaker, UserModel) -> None:
     from crudauth.storage import get_session_storage

@@ -96,9 +96,9 @@ class BearerTransport(Transport):
             Absent or non-bearer header → ``None`` (this transport's credential
             isn't present; the facade tries the next transport). A present but
             *invalid* token (bad signature, expired, wrong type) → raises
-            ``UnauthorizedException`` (Convention 6: a tampered credential
-            hard-fails rather than silently falling through), mirroring the
-            session transport's CSRF behavior. A valid token whose user no longer
+            ``UnauthorizedException``: a tampered credential hard-fails rather
+            than silently falling through, mirroring the session transport's
+            CSRF behavior. A valid token whose user no longer
             exists / is inactive returns ``None`` (account vanished, treat as
             anonymous), matching the session transport.
         """

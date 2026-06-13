@@ -36,7 +36,7 @@ class AbstractOAuthProvider(ABC):
     Subclass it, pass the three endpoints + scopes + ``provider_name`` to
     ``super().__init__``, implement [process_user_info][crudauth.oauth.provider.AbstractOAuthProvider.process_user_info], and register it
     with [OAuthProviderFactory][crudauth.oauth.factory.OAuthProviderFactory]. Set ``email_verified`` honestly -
-    account linking gates on it (Convention 10).
+    auto-linking to an existing account requires a verified provider email.
 
     Example:
         ```python
