@@ -26,7 +26,12 @@ from ...hooks import HookContext
 from ...principal import Principal
 from ...storage import get_session_storage
 from ...storage.constants import BACKEND_MEMORY
-from ...utils import get_client_ip, verify_password
+from ...utils import (
+    canonical_identifier,
+    dummy_verify_password,
+    get_client_ip,
+    verify_password,
+)
 from .constants import (
     CSRF_HEADER_NAME,
     CSRF_STORAGE_PREFIX,
@@ -146,6 +151,7 @@ class SessionTransport(Transport):
             cookie_secure=cookies.secure,
             cookie_samesite=cookies.samesite,
             cookie_path=cookies.path,
+            trusted_proxy_hops=runtime.trusted_proxy_hops,
         )
 
     async def initialize(self) -> None:
@@ -228,9 +234,10 @@ class SessionTransport(Transport):
             switches the cookie from session-scoped to a long persistent lifetime.
             """
             assert self.manager is not None
-            ip = get_client_ip(request)
+            ip = get_client_ip(request, runtime.trusted_proxy_hops)
+            login_id = canonical_identifier(form_data.username)
             allowed, _, retry_after = await self.manager.track_login_attempt(
-                ip, form_data.username, success=False
+                ip, login_id, success=False
             )
             if not allowed:
                 raise RateLimitException(
@@ -238,14 +245,17 @@ class SessionTransport(Transport):
                 )
 
             user = await runtime.repo.get_by_identifier(db, form_data.username)
-            if user is None or not verify_password(
+            if user is None:
+                dummy_verify_password(form_data.password)
+                raise UnauthorizedException("Incorrect username or password")
+            if not verify_password(
                 form_data.password, runtime.repo.get(user, "hashed_password", "")
             ):
                 raise UnauthorizedException("Incorrect username or password")
             if not runtime.repo.is_active(user):
                 raise UnauthorizedException("Account is disabled")
 
-            await self.manager.track_login_attempt(ip, form_data.username, success=True)
+            await self.manager.track_login_attempt(ip, login_id, success=True)
 
             metadata = {REMEMBER_ME_META_KEY: True} if remember_me else {}
             session_id, csrf = await self.manager.create_session(

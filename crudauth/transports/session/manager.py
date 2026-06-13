@@ -58,6 +58,7 @@ class SessionManager:
         cookie_path: str = "/",
         session_cookie_name: str = SESSION_COOKIE_NAME,
         csrf_cookie_name: str = CSRF_COOKIE_NAME,
+        trusted_proxy_hops: int = 0,
     ):
         self.storage = session_storage
         self.csrf_storage = csrf_storage
@@ -73,6 +74,7 @@ class SessionManager:
         self.cookie_path = cookie_path
         self.session_cookie_name = session_cookie_name
         self.csrf_cookie_name = csrf_cookie_name
+        self.trusted_proxy_hops = trusted_proxy_hops
 
     # --- timeout helpers -----------------------------------------------------
     def timeout_seconds_for(self, metadata: dict[str, Any] | None) -> int:
@@ -100,7 +102,7 @@ class SessionManager:
         """
         user_agent = request.headers.get("user-agent", "")
         device_info = parse_user_agent(user_agent).model_dump()
-        ip_address = get_client_ip(request)
+        ip_address = get_client_ip(request, self.trusted_proxy_hops)
 
         await self._enforce_session_limit(user_id)
 

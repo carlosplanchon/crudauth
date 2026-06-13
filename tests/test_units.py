@@ -14,14 +14,30 @@ from crudauth.transports.bearer.tokens import (
     verify_signed_token,
     verify_token,
 )
+from starlette.requests import Request
+
 from crudauth.utils import (
     canonical_email,
+    canonical_identifier,
+    dummy_verify_password,
+    get_client_ip,
     get_password_hash,
     make_unusable_password,
     verify_password,
 )
 
 SECRET = "unit-secret"
+
+
+def _request(headers: dict[str, str] | None = None, client_host: str = "10.0.0.1") -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "headers": [(k.encode(), v.encode()) for k, v in (headers or {}).items()],
+            "client": (client_host, 1234),
+        }
+    )
 
 
 # --- password hashing --------------------------------------------------------
@@ -44,6 +60,68 @@ def test_unusable_password_never_verifies() -> None:
 def test_canonical_email() -> None:
     assert canonical_email("  Foo@X.com ") == "foo@x.com"
     assert canonical_email(None) is None
+
+
+def test_long_password_not_truncated_at_72_bytes() -> None:
+    # Two passwords sharing a 72-byte prefix must NOT be interchangeable
+    # (bcrypt alone truncates at 72 bytes; the SHA-256 pre-hash prevents it).
+    base = "a" * 72
+    h = get_password_hash(base + "X")
+    assert verify_password(base + "X", h)
+    assert not verify_password(base + "Y", h)
+    assert not verify_password(base, h)
+
+
+def test_password_roundtrip_very_long() -> None:
+    pw = "correct horse battery staple " * 10
+    assert verify_password(pw, get_password_hash(pw))
+
+
+def test_dummy_verify_password_runs_without_raising() -> None:
+    # Exercises the absent-user timing-equalization path; must not raise.
+    dummy_verify_password("whatever")
+
+
+# --- login identifier canonicalization (lockout key) -------------------------
+def test_canonical_identifier_normalizes_email_case() -> None:
+    assert canonical_identifier("V@X.com") == "v@x.com"
+    assert canonical_identifier("  Foo@x.com ") == "foo@x.com"
+
+
+def test_canonical_identifier_leaves_usernames_untouched() -> None:
+    assert canonical_identifier("Alice") == "Alice"
+
+
+# --- client IP / trusted proxy ----------------------------------------------
+def test_get_client_ip_ignores_xff_without_trusted_hops() -> None:
+    req = _request({"x-forwarded-for": "1.2.3.4"}, client_host="10.0.0.1")
+    assert get_client_ip(req) == "10.0.0.1"
+
+
+def test_get_client_ip_uses_socket_peer_by_default() -> None:
+    assert get_client_ip(_request(client_host="203.0.113.9")) == "203.0.113.9"
+
+
+def test_get_client_ip_single_trusted_hop() -> None:
+    req = _request({"x-forwarded-for": "1.2.3.4"}, client_host="10.0.0.1")
+    assert get_client_ip(req, trusted_hops=1) == "1.2.3.4"
+
+
+def test_get_client_ip_ignores_prepended_spoof() -> None:
+    # Attacker prepends a fake left-most value; one trusted hop reads the
+    # right-most entry (set by our proxy), not the spoof.
+    req = _request({"x-forwarded-for": "9.9.9.9, 1.2.3.4"}, client_host="10.0.0.1")
+    assert get_client_ip(req, trusted_hops=1) == "1.2.3.4"
+
+
+def test_get_client_ip_two_trusted_hops() -> None:
+    req = _request({"x-forwarded-for": "1.2.3.4, 172.16.0.1"}, client_host="10.0.0.1")
+    assert get_client_ip(req, trusted_hops=2) == "1.2.3.4"
+
+
+def test_get_client_ip_chain_shorter_than_hops_clamps_to_leftmost() -> None:
+    req = _request({"x-forwarded-for": "1.2.3.4"}, client_host="10.0.0.1")
+    assert get_client_ip(req, trusted_hops=5) == "1.2.3.4"
 
 
 # --- jwt tokens --------------------------------------------------------------

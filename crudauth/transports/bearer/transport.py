@@ -15,7 +15,12 @@ from ...core import AuthContext, AuthRuntime, CookieConfig, Transport
 from ...exceptions import RateLimitException, UnauthorizedException
 from ...hooks import HookContext
 from ...principal import Principal
-from ...utils import get_client_ip, verify_password
+from ...utils import (
+    canonical_identifier,
+    dummy_verify_password,
+    get_client_ip,
+    verify_password,
+)
 from .constants import (
     REFRESH_LOCATION_BODY,
     REFRESH_LOCATION_COOKIE,
@@ -138,11 +143,12 @@ class BearerTransport(Transport):
             as an httpOnly cookie or returned in the body per ``refresh=``.
             Subject to the shared login lockout.
             """
-            ip = get_client_ip(request)
+            ip = get_client_ip(request, runtime.trusted_proxy_hops)
+            login_id = canonical_identifier(form_data.username)
             lockout = runtime.lockout
             if lockout is not None:
                 allowed, _, retry_after = await lockout.check_and_record(
-                    ip, form_data.username, success=False
+                    ip, login_id, success=False
                 )
                 if not allowed:
                     raise RateLimitException(
@@ -150,7 +156,10 @@ class BearerTransport(Transport):
                     )
 
             user = await runtime.repo.get_by_identifier(db, form_data.username)
-            if user is None or not verify_password(
+            if user is None:
+                dummy_verify_password(form_data.password)
+                raise UnauthorizedException("Incorrect username or password")
+            if not verify_password(
                 form_data.password, runtime.repo.get(user, "hashed_password", "")
             ):
                 raise UnauthorizedException("Incorrect username or password")
@@ -158,7 +167,7 @@ class BearerTransport(Transport):
                 raise UnauthorizedException("Account is disabled")
 
             if lockout is not None:
-                await lockout.check_and_record(ip, form_data.username, success=True)
+                await lockout.check_and_record(ip, login_id, success=True)
 
             scopes = tuple(form_data.scopes) if form_data.scopes else self.default_scopes
             body = self._mint(runtime, user, scopes, response)

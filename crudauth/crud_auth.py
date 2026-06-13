@@ -94,6 +94,7 @@ class CRUDAuth:
         register_schema: type[BaseModel] | None = None,
         rate_limiter: "RateLimiterBackend | None" = None,
         rate_limits: dict[str, RateLimit] | None = None,
+        trusted_proxy_hops: int = 0,
     ):
         """Configure the auth surface.
 
@@ -125,6 +126,12 @@ class CRUDAuth:
                 ``redis_rate_limiter(...)`` in production.
             rate_limits: Per-action overrides merged over
                 :data:`~crudauth.ratelimit.DEFAULT_RATE_LIMITS`.
+            trusted_proxy_hops: Number of trusted reverse proxies in front of the
+                app. ``0`` (default) ignores ``X-Forwarded-For`` and keys per-IP
+                rate limits / lockout on the socket peer; set to the count of
+                proxies you control (e.g. ``1`` behind a single nginx/Caddy) so
+                the real client IP is read without trusting attacker-supplied
+                header values. See [get_client_ip][crudauth.utils.get_client_ip].
 
         Raises:
             ValueError: If ``SECRET_KEY`` is empty, or ``oauth`` is set without a
@@ -149,6 +156,7 @@ class CRUDAuth:
             algorithm=algorithm,
             cookie_config=cookies or CookieConfig(),
             rate_limiter=rate_limiter or MemoryRateLimiterBackend(),
+            trusted_proxy_hops=trusted_proxy_hops,
         )
         self._session_transport = next(
             (t for t in self.transports if isinstance(t, SessionTransport)), None
@@ -406,7 +414,8 @@ class CRUDAuth:
         if key is KeyBy.IP:
 
             async def by_ip(request: Request, response: Response) -> None:
-                await self._apply_rate_limit(response, action, get_client_ip(request), resolved)
+                ip = get_client_ip(request, self.runtime.trusted_proxy_hops)
+                await self._apply_rate_limit(response, action, ip, resolved)
 
             return by_ip
 

@@ -149,3 +149,30 @@ async def test_login_lockout_returns_429(get_session, UserModel) -> None:
         assert locked.status_code == 429
         assert "Retry-After" in locked.headers
     await auth.shutdown()
+
+
+async def test_login_lockout_not_bypassable_by_email_case(get_session, UserModel) -> None:
+    # Case variants of one email must collapse to a single lockout key, so an
+    # attacker can't reset the per-user counter by varying case (Finding 3).
+    auth = CRUDAuth(
+        session=get_session,
+        user_model=UserModel,
+        SECRET_KEY="test-secret",
+        transports=[SessionTransport(cookies=CookieConfig(secure=False), login_max_attempts=2)],
+    )
+    app = FastAPI()
+    app.include_router(auth.router)
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        await c.post(
+            "/register", json={"email": "v@x.com", "username": "victim", "password": "pw123456"}
+        )
+        variants = ["v@x.com", "V@x.com", "v@X.com", "V@X.COM"]
+        statuses = [
+            (await c.post("/login", data={"username": v, "password": "wrong"})).status_code
+            for v in variants
+        ]
+        assert 429 in statuses  # despite four distinct spellings, one account locks
+    await auth.shutdown()

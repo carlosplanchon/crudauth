@@ -69,7 +69,7 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
             both not-leak and tell a genuine new user. A username collision is
             always allowed to surface (public namespace).
         """
-        ip = get_client_ip(request)
+        ip = get_client_ip(request, auth.runtime.trusted_proxy_hops)
         email_on = auth._email_service is not None
         data = cast(BaseModel, body).model_dump()
         password = data.pop("password")
