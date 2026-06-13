@@ -81,14 +81,16 @@ class EmailFlowService:
 
     # --- one-time-use guard --------------------------------------------------
     async def _consume(self, token: str, ttl_seconds: int) -> bool:
-        """Mark a token consumed. Returns ``True`` on first use, ``False`` on replay."""
+        """Mark a token consumed. Returns ``True`` on first use, ``False`` on replay.
+
+        Uses the storage layer's atomic ``set_if_absent`` so two concurrent
+        redemptions of the same token can't both win the race - which, for a
+        password reset, could otherwise apply two different new passwords.
+        """
         if self.token_store is None:
             return True
         key = hashlib.sha256(token.encode()).hexdigest()
-        if await self.token_store.exists(key):
-            return False
-        await self.token_store.create(_UsedToken(), session_id=key, expiration=ttl_seconds)
-        return True
+        return await self.token_store.set_if_absent(key, _UsedToken(), expiration=ttl_seconds)
 
     async def _email_within_limit(self, action: str, email: str) -> bool:
         """Per-target-email throttle. Returns ``True`` if a send is allowed.

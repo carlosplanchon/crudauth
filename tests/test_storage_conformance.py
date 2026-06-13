@@ -1,4 +1,4 @@
-"""C17: every AbstractSessionStorage backend passes the same behavioral suite."""
+"""Every AbstractSessionStorage backend passes the same behavioral suite."""
 
 from __future__ import annotations
 
@@ -82,3 +82,39 @@ async def test_delete_without_user_id_still_updates_index(storage) -> None:
     await storage.create(SessionData(user_id=9), session_id="x")
     assert await storage.delete("x") is True
     assert await storage.get_user_sessions(9) == []
+
+
+async def test_set_if_absent_first_wins(storage) -> None:
+    assert await storage.set_if_absent("tok", SessionData(user_id=1), expiration=50) is True
+    # second attempt on the same key loses
+    assert await storage.set_if_absent("tok", SessionData(user_id=2), expiration=50) is False
+    # and the original value is the one that stuck
+    got = await storage.get("tok", SessionData)
+    assert got is not None and got.user_id == 1
+
+
+async def test_set_if_absent_concurrent_single_winner(storage) -> None:
+    import asyncio
+
+    results = await asyncio.gather(
+        *[storage.set_if_absent("race", SessionData(user_id=i), expiration=50) for i in range(20)]
+    )
+    assert sum(1 for r in results if r is True) == 1  # exactly one winner
+
+
+async def test_get_and_delete_returns_then_removes(storage) -> None:
+    await storage.create(SessionData(user_id=5), session_id="g")
+    got = await storage.get_and_delete("g", SessionData)
+    assert got is not None and got.user_id == 5
+    assert await storage.exists("g") is False
+    assert await storage.get_and_delete("g", SessionData) is None  # second call: gone
+
+
+async def test_get_and_delete_concurrent_single_consumer(storage) -> None:
+    import asyncio
+
+    await storage.create(SessionData(user_id=5), session_id="once")
+    results = await asyncio.gather(
+        *[storage.get_and_delete("once", SessionData) for _ in range(20)]
+    )
+    assert sum(1 for r in results if r is not None) == 1  # consumed exactly once

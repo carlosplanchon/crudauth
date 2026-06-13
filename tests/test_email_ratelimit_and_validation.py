@@ -1,5 +1,5 @@
 """Email-flow rate limiting (per-IP edge + silent per-email), input validation,
-and the session SameSite=None rejection (C24)."""
+and the session SameSite=None rejection."""
 
 from __future__ import annotations
 
@@ -117,7 +117,7 @@ async def test_register_rejects_invalid_email(get_session, UserModel) -> None:
 
 
 # =============================================================================
-# C24 - session transport rejects SameSite=None at construction
+# session transport rejects SameSite=None at construction
 # =============================================================================
 def test_session_rejects_samesite_none(get_session, UserModel) -> None:
     with pytest.raises(ValueError, match="SameSite=None"):

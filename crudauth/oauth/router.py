@@ -92,12 +92,16 @@ def build_oauth_router(
         state: Annotated[str, Query()],
     ):
         """Handle the provider callback: verify state/PKCE, link-or-create the
-        user, start a session, and 307-redirect to the validated target."""
+        user, start a session, and 307-redirect to the validated target.
+
+        Note:
+            The state is consumed with an atomic ``get_and_delete`` so two
+            concurrent callbacks can't both redeem the same state+code pair.
+        """
         prov = _provider(provider)
-        state_data = await state_storage.get(state, OAuthState)
+        state_data = await state_storage.get_and_delete(state, OAuthState)
         if state_data is None or state_data.provider != provider:
             raise BadRequestException("Invalid or expired OAuth state")
-        await state_storage.delete(state)
 
         token = await prov.exchange_code(code, code_verifier=state_data.code_verifier)
         raw = await prov.get_user_info(token["access_token"])

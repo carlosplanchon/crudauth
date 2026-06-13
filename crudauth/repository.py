@@ -49,12 +49,15 @@ class UserRepository:
         return self.column_map.get(logical, logical)
 
     def has(self, logical: str) -> bool:
+        """Whether the model actually has the column for ``logical``."""
         return hasattr(self.model, self.col(logical))
 
     def get(self, user: Any, logical: str, default: Any = None) -> Any:
+        """Read a logical field off ``user``, or ``default`` if the column is absent."""
         return getattr(user, self.col(logical), default)
 
     def set_field(self, user: Any, logical: str, value: Any) -> None:
+        """Set a logical field on ``user`` by its resolved column name."""
         setattr(user, self.col(logical), value)
 
     def _attr(self, logical: str) -> Any:
