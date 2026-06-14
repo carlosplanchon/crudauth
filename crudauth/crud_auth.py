@@ -15,7 +15,7 @@ import logging
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Sequence
 
 from fastapi import APIRouter, Depends, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from ._register import build_register_route
 from .constants import (
@@ -24,13 +24,19 @@ from .constants import (
     DEFAULT_LOGIN_LOCKOUT_BASE_SECONDS,
     DEFAULT_LOGIN_LOCKOUT_MAX_SECONDS,
     DEFAULT_LOGIN_MAX_ATTEMPTS,
+    MIN_PASSWORD_LENGTH,
     OAUTH_STATE_TTL_SECONDS,
     USED_TOKEN_TTL_SECONDS,
 )
 from .core import AuthContext, AuthRuntime, CookieConfig, Transport
 from .email.router import build_email_router
 from .email.service import EmailFlowService
-from .exceptions import ForbiddenException, RateLimitException, UnauthorizedException
+from .exceptions import (
+    BadRequestException,
+    ForbiddenException,
+    RateLimitException,
+    UnauthorizedException,
+)
 from .hooks import AuthHooks
 from .oauth import OAuthAccountService, OAuthProviderFactory
 from .oauth.router import build_oauth_router
@@ -48,7 +54,7 @@ from .storage import get_session_storage
 from .storage.constants import BACKEND_MEMORY
 from .transports.bearer.transport import BearerTransport
 from .transports.session.transport import SessionTransport
-from .utils import get_client_ip
+from .utils import get_client_ip, get_password_hash, is_unusable_password
 
 if TYPE_CHECKING:  # pragma: no cover
     from .ratelimit import RateLimiterBackend
@@ -57,6 +63,10 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger("crudauth")
 
 __all__ = ["CRUDAuth"]
+
+
+class _SetPasswordIn(BaseModel):
+    new_password: Annotated[str, Field(min_length=MIN_PASSWORD_LENGTH)]
 
 
 class CRUDAuth:
@@ -583,6 +593,32 @@ class CRUDAuth:
                 "scopes": list(user.scopes),
                 "via": user.transport,
             }
+
+        @router.post("/set-password")
+        async def set_password(
+            body: _SetPasswordIn,
+            principal: Annotated[Principal, Depends(self.current_user())],
+            db: Annotated[Any, Depends(self.session)],
+        ):
+            """Set a password for an account that doesn't have one (OAuth-only).
+
+            Note:
+                The active session/credential IS the re-authentication - there's
+                no current password to check because the account never had one.
+                This is **set**, not **change**: it refuses (400) if the account
+                already has a usable password (use the password-reset flow to
+                change an existing one). It does not evict other sessions/tokens
+                (establishing a first credential isn't a compromise response).
+            """
+            user = principal.user
+            if not is_unusable_password(self.repo.get(user, "hashed_password", "")):
+                raise BadRequestException(
+                    "Account already has a password; use the password reset flow to change it."
+                )
+            await self.repo.update(
+                db, user, {"hashed_password": get_password_hash(body.new_password)}
+            )
+            return {"detail": "Password set."}
 
         return router
 

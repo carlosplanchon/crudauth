@@ -265,7 +265,9 @@ async def test_password_reset_revokes_outstanding_bearer_tokens(get_session, Use
         await c.post("/password/reset-request", json={"email": "a@x.com"})
         reset = sender.token_for("reset_password")
         assert (
-            await c.post("/password/reset-confirm", json={"token": reset, "new_password": "newpw12345"})
+            await c.post(
+                "/password/reset-confirm", json={"token": reset, "new_password": "newpw12345"}
+            )
         ).status_code == 200
 
         # the reset bumped token_version → the old access token's ver is now stale

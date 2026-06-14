@@ -16,6 +16,7 @@ __all__ = [
     "verify_password",
     "dummy_verify_password",
     "make_unusable_password",
+    "is_unusable_password",
     "canonical_email",
     "canonical_identifier",
     "get_client_ip",
@@ -87,6 +88,16 @@ def make_unusable_password() -> str:
     ``set_unusable_password``.
     """
     return "!" + secrets.token_urlsafe(16)
+
+
+def is_unusable_password(hashed_password: str) -> bool:
+    """Whether ``hashed_password`` is the unusable sentinel (or empty).
+
+    ``True`` means the account has no real password set - an OAuth-only account
+    (see [make_unusable_password][crudauth.utils.make_unusable_password], whose
+    sentinel starts with ``!``, never a valid bcrypt hash).
+    """
+    return not hashed_password or hashed_password.startswith("!")
 
 
 @overload

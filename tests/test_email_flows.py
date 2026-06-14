@@ -144,7 +144,9 @@ async def test_password_reset_flow(ctx) -> None:
     r = await client.post("/password/reset-request", json={"email": "a@x.com"})
     assert r.status_code == 200
     token = sender.token_for("reset_password")
-    r = await client.post("/password/reset-confirm", json={"token": token, "new_password": "newpw12345"})
+    r = await client.post(
+        "/password/reset-confirm", json={"token": token, "new_password": "newpw12345"}
+    )
     assert r.status_code == 200
     # old password no longer works, new one does
     assert (
