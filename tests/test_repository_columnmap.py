@@ -72,3 +72,12 @@ def test_gated_register_fields_flags_alias() -> None:
     repo = UserRepository(Account, column_map=COLUMN_MAP)
     # a register schema declaring the mapped name is flagged at startup
     assert repo.gated_register_fields(["email", "username", "is_admin"]) == {"is_admin"}
+
+
+async def test_increment_token_version_noop_without_column(session) -> None:
+    # Account has no token_version column → epoch revocation is a graceful no-op.
+    repo = UserRepository(Account, column_map=COLUMN_MAP)
+    acct = await repo.create(session, {"email": "a@x.com", "username": "a", "hashed_password": "h"})
+    assert repo.token_version(acct) == 0
+    await repo.increment_token_version(session, acct)  # no column → no error, no change
+    assert repo.token_version(acct) == 0

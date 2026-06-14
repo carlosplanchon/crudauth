@@ -27,6 +27,7 @@ from .constants import (
     REFRESH_LOCATIONS,
     REFRESH_TOKEN_NAME,
     TOKEN_TYPE_BEARER,
+    TOKEN_VERSION_CLAIM,
 )
 from .tokens import (
     TokenType,
@@ -63,11 +64,15 @@ class BearerTransport(Transport):
         tokens (rather than honoring it until the refresh token expires).
 
     Note:
-        Bearer tokens are **stateless** - there is no server-side revocation or
-        rotation, so a stolen refresh token is valid until it expires
-        (``refresh_ttl_days``, default 30). For revocable, "sign out everywhere"
-        auth, use the session transport (``auth.sessions.revoke*``). Refresh-token
-        rotation is a planned future addition.
+        Bearer tokens are **stateless** - there is no per-token revocation or
+        rotation, so a stolen token is valid until it expires
+        (``refresh_ttl_days``, default 30) *unless* the user's credential epoch is
+        bumped. A password reset increments the user's ``token_version`` (embedded
+        as the ``ver`` claim), which invalidates every outstanding access AND
+        refresh token for that user at once. Per-token rotation is a planned
+        future addition. (Epoch revocation requires a ``token_version`` column;
+        [AuthUserMixin][crudauth.models.mixin.AuthUserMixin] supplies it - a model
+        without it simply isn't epoch-revocable.)
 
     Note:
         ``/token`` shares the escalating login lockout with the session
@@ -123,7 +128,9 @@ class BearerTransport(Transport):
             wrong type, missing ``sub``) → raises ``UnauthorizedException``,
             mirroring the session transport's CSRF hard-fail. A valid token whose
             user no longer exists / is inactive returns ``None`` (account
-            vanished, treat as anonymous).
+            vanished, treat as anonymous). A token whose ``ver`` claim is below
+            the user's current ``token_version`` (e.g. revoked by a password
+            reset) also returns ``None`` - it's superseded, not tampered.
         """
         header = request.headers.get("authorization")
         if not header:
@@ -142,6 +149,8 @@ class BearerTransport(Transport):
 
         user = await ctx.resolve_user(payload["sub"])
         if user is None or not ctx.repo.is_active(user):
+            return None
+        if payload.get(TOKEN_VERSION_CLAIM, 0) != ctx.repo.token_version(user):
             return None
 
         scopes = tuple(payload.get("scopes") or ())
@@ -222,9 +231,14 @@ class BearerTransport(Transport):
             user = await runtime.repo.get_by_id(db, payload["sub"])
             if user is None or not runtime.repo.is_active(user):
                 raise UnauthorizedException("Invalid or expired refresh token")
+            if payload.get(TOKEN_VERSION_CLAIM, 0) != runtime.repo.token_version(user):
+                raise UnauthorizedException("Invalid or expired refresh token")
             scopes = self._clamp_scopes(payload.get("scopes") or ())
             access = create_access_token(
-                {"sub": str(runtime.repo.user_id(user))},
+                {
+                    "sub": str(runtime.repo.user_id(user)),
+                    TOKEN_VERSION_CLAIM: runtime.repo.token_version(user),
+                },
                 runtime.secret_key,
                 expires_delta=timedelta(seconds=self.access_ttl),
                 algorithm=runtime.algorithm,
@@ -249,15 +263,16 @@ class BearerTransport(Transport):
         self, runtime: AuthRuntime, user: Any, scopes: tuple[str, ...], response: Response
     ) -> dict[str, Any]:
         uid = str(runtime.repo.user_id(user))
+        ver = runtime.repo.token_version(user)
         access = create_access_token(
-            {"sub": uid},
+            {"sub": uid, TOKEN_VERSION_CLAIM: ver},
             runtime.secret_key,
             expires_delta=timedelta(seconds=self.access_ttl),
             algorithm=runtime.algorithm,
             scopes=list(scopes),
         )
         refresh = create_refresh_token(
-            {"sub": uid, "scopes": list(scopes)},
+            {"sub": uid, TOKEN_VERSION_CLAIM: ver, "scopes": list(scopes)},
             runtime.secret_key,
             expires_delta=timedelta(days=self.refresh_ttl_days),
             algorithm=runtime.algorithm,

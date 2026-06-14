@@ -8,7 +8,15 @@ import httpx
 import pytest
 from fastapi import Depends, FastAPI
 
-from crudauth import BearerTransport, CRUDAuth, CookieConfig, Principal, SessionTransport
+from crudauth import (
+    BearerTransport,
+    CookieConfig,
+    CRUDAuth,
+    EmailConfig,
+    EmailSender,
+    Principal,
+    SessionTransport,
+)
 from crudauth.transports.bearer.tokens import TokenType, create_access_token, verify_token
 
 SECRET = "test-secret-key-0123456789-0123456789"
@@ -176,6 +184,72 @@ async def test_self_granted_scope_does_not_satisfy_gate(client) -> None:
 def test_default_scopes_must_be_subset_of_grantable() -> None:
     with pytest.raises(ValueError, match="subset"):
         BearerTransport(default_scopes=["admin"], grantable_scopes=["reports:read"])
+
+
+class _Capture(EmailSender):
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send(self, *, to: str, subject: str, body: str, kind: str) -> None:
+        self.sent.append({"body": body, "kind": kind})
+
+    def token_for(self, kind: str) -> str:
+        for msg in reversed(self.sent):
+            if msg["kind"] == kind:
+                return msg["body"].split("token=")[-1]
+        raise AssertionError(f"no {kind} email captured")
+
+
+async def test_password_reset_revokes_outstanding_bearer_tokens(get_session, UserModel) -> None:
+    sender = _Capture()
+    auth = CRUDAuth(
+        session=get_session,
+        user_model=UserModel,
+        SECRET_KEY=SECRET,
+        transports=[BearerTransport(refresh="body", cookies=CookieConfig(secure=False))],
+        email=EmailConfig(sender=sender, frontend_url="https://app"),
+    )
+    app = FastAPI()
+    app.include_router(auth.router)
+
+    @app.get("/v1/items")
+    async def items(user: Principal = Depends(auth.current_user(transport="bearer"))):
+        return {"id": user.user_id}
+
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        await c.post(
+            "/register", json={"email": "a@x.com", "username": "alice", "password": "pw123456"}
+        )
+        tok = (await c.post("/token", data={"username": "alice", "password": "pw123456"})).json()
+        access1, refresh1 = tok["access_token"], tok["refresh_token"]
+
+        # both work before the reset
+        assert (
+            await c.get("/v1/items", headers={"Authorization": f"Bearer {access1}"})
+        ).status_code == 200
+
+        await c.post("/password/request-reset", json={"email": "a@x.com"})
+        reset = sender.token_for("reset_password")
+        assert (
+            await c.post("/password/reset", json={"token": reset, "new_password": "newpw12345"})
+        ).status_code == 200
+
+        # the reset bumped token_version → the old access token's ver is now stale
+        assert (
+            await c.get("/v1/items", headers={"Authorization": f"Bearer {access1}"})
+        ).status_code == 401
+        # ...and the old refresh token can no longer mint access tokens
+        assert (await c.post("/refresh", json={"refresh_token": refresh1})).status_code == 401
+
+        # a fresh login carries the new ver and works
+        tok2 = (await c.post("/token", data={"username": "alice", "password": "newpw12345"})).json()
+        assert (
+            await c.get("/v1/items", headers={"Authorization": f"Bearer {tok2['access_token']}"})
+        ).status_code == 200
+    await auth.shutdown()
 
 
 async def test_refresh_reclamps_after_grantable_tightened(get_session, UserModel) -> None:

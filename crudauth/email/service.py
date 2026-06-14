@@ -205,7 +205,7 @@ class EmailFlowService:
         )
 
     async def reset_password(self, db: AsyncSession, token: str, new_password: str) -> Any:
-        """Reset the password and evict the user's other sessions.
+        """Reset the password and evict every outstanding credential.
 
         Args:
             db: Active async session.
@@ -219,9 +219,13 @@ class EmailFlowService:
             BadRequestException: If the token is invalid, expired, or already used.
 
         Note:
-            Terminating the user's other sessions is attacker-eviction: a reset
-            often follows a compromise, so any session an attacker holds dies
-            with it.
+            A reset is attacker-eviction: it often follows a compromise, so any
+            credential an attacker holds must die with it. Server-side sessions
+            are terminated, and the user's ``token_version`` is bumped - which
+            invalidates all outstanding bearer access and refresh tokens (their
+            ``ver`` claim is now stale). Bearer eviction needs a ``token_version``
+            column; without it (a custom model that omits it) only sessions are
+            evicted.
         """
         sub = verify_signed_token(token, self.secret_key, RESET, algorithm=self.algorithm)
         if sub is None:
@@ -232,6 +236,7 @@ class EmailFlowService:
         if user is None:
             raise BadRequestException("Invalid or expired token")
         await self.repo.update(db, user, {"hashed_password": get_password_hash(new_password)})
+        await self.repo.increment_token_version(db, user)
         if self.session_manager is not None:
             await self.session_manager.terminate_all_user_sessions(
                 self.repo.user_id(user), reason="password_reset"

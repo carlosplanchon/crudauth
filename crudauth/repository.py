@@ -253,6 +253,20 @@ class UserRepository:
     def user_id(self, user: Any) -> Any:
         return self.get(user, "id")
 
+    def token_version(self, user: Any) -> int:
+        """The user's credential epoch (``0`` if the model has no such column)."""
+        return int(self.get(user, "token_version", 0) or 0)
+
+    async def increment_token_version(self, db: AsyncSession, user: Any) -> None:
+        """Bump the credential epoch, revoking outstanding bearer tokens.
+
+        A no-op when the model has no ``token_version`` column (bearer tokens
+        then simply aren't epoch-revocable; the limitation is documented).
+        """
+        if not self.has("token_version"):
+            return
+        await self.update(db, user, {"token_version": self.token_version(user) + 1})
+
     def to_dict(self, user: Any) -> dict[str, Any]:
         """Project a user row onto the logical contract (for hooks).
 

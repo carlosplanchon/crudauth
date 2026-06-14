@@ -166,6 +166,17 @@ def test_signed_token_purpose() -> None:
 
 
 # --- oauth account linking ---------------------------------------------------
+async def test_token_version_increments(sessionmaker, UserModel) -> None:
+    repo = UserRepository(UserModel)
+    async with sessionmaker() as db:
+        user = await repo.create(
+            db, {"email": "tv@x.com", "username": "tv", "hashed_password": "h"}
+        )
+        assert repo.token_version(user) == 0
+        await repo.increment_token_version(db, user)
+        assert repo.token_version(user) == 1
+
+
 async def test_oauth_creates_then_links(sessionmaker, UserModel) -> None:
     repo = UserRepository(UserModel)
     service = OAuthAccountService(repo)

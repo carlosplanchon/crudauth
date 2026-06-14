@@ -57,6 +57,7 @@ LOGICAL_FIELDS = (
     "is_active",
     "is_superuser",
     "email_verified",
+    "token_version",
     "oauth_provider",
     "google_id",
     "github_id",
