@@ -5,6 +5,8 @@ the request model is chosen at runtime (``register_schema=``), and FastAPI must
 see the real Pydantic class as the body annotation, not a deferred string.
 """
 
+import logging
+from collections.abc import Awaitable
 from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -17,6 +19,8 @@ from .ratelimit import KeyBy
 from .utils import get_client_ip, get_password_hash
 
 __all__ = ["RegisterIn", "build_register_route"]
+
+logger = logging.getLogger("crudauth")
 
 _ENROLLED_DETAIL = "If the email is available, check your inbox to finish signing up."
 
@@ -81,6 +85,22 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
         email = data.pop("email")
         username = data.pop("username")
 
+        async def _send_best_effort(coro: Awaitable[Any]) -> None:
+            """Dispatch a registration email without letting a send failure fail
+            the request.
+
+            The account row may already be committed, and the new-vs-existing
+            email branches must return the same status; a raised send (SMTP down)
+            would both lose the registration to a 500 and turn the failure into an
+            enumeration oracle. So failures are logged and swallowed. Senders
+            should enqueue rather than block (see
+            [EmailSender.send][crudauth.email.sender.EmailSender.send]).
+            """
+            try:
+                await coro
+            except Exception:
+                logger.warning("crudauth: registration email failed to send", exc_info=True)
+
         async def _on_existing() -> dict[str, Any]:
             """Uniform response when the email/username is already taken.
 
@@ -91,7 +111,7 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
             """
             if await auth.repo.get_by_email(db, email) is not None:
                 if email_on:
-                    await auth._email_service.notify_existing_account(email)
+                    await _send_best_effort(auth._email_service.notify_existing_account(email))
                     response.status_code = status.HTTP_202_ACCEPTED
                     return {"detail": _ENROLLED_DETAIL}
                 raise DuplicateValueException("Email already registered")
@@ -125,7 +145,7 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
         )
 
         if email_on:
-            await auth._email_service.request_email_verification(db, email)
+            await _send_best_effort(auth._email_service.request_email_verification(db, email))
             response.status_code = status.HTTP_202_ACCEPTED
             return {"detail": _ENROLLED_DETAIL}
         return {

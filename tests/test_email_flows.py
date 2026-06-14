@@ -160,3 +160,68 @@ async def test_reset_request_idempotent_for_unknown_email(ctx) -> None:
     r = await client.post("/password/request-reset", json={"email": "ghost@x.com"})
     assert r.status_code == 200  # no enumeration
     assert sender.sent == []
+
+
+class _FailingSender(EmailSender):
+    async def send(self, *, to, subject, body, kind) -> None:
+        raise RuntimeError("smtp down")
+
+
+def _failing_email_app(get_session, UserModel):
+    auth = CRUDAuth(
+        session=get_session,
+        user_model=UserModel,
+        SECRET_KEY="test-secret-key-0123456789-0123456789",
+        transports=[SessionTransport(cookies=CookieConfig(secure=False))],
+        email=EmailConfig(sender=_FailingSender(), frontend_url="https://app"),
+    )
+    app = FastAPI()
+    app.include_router(auth.router)
+    return app, auth
+
+
+async def test_register_succeeds_when_email_send_fails(
+    get_session, UserModel, sessionmaker
+) -> None:
+    # account creation must not be coupled to email delivery: a raising sender
+    # still yields 202 and a committed user.
+    app, auth = _failing_email_app(get_session, UserModel)
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.post(
+            "/register", json={"email": "a@x.com", "username": "a", "password": "pw123456"}
+        )
+        assert r.status_code == 202
+    repo = UserRepository(UserModel)
+    async with sessionmaker() as db:
+        assert await repo.get_by_email(db, "a@x.com") is not None
+    await auth.shutdown()
+
+
+async def test_register_existing_email_uniform_when_send_fails(
+    get_session, UserModel, sessionmaker
+) -> None:
+    # the existing-email branch (notify) must also stay 202 when the send fails,
+    # or a send error would become an enumeration oracle.
+    repo = UserRepository(UserModel)
+    async with sessionmaker() as db:
+        await repo.create(
+            db,
+            {
+                "email": "taken@x.com",
+                "username": "taken",
+                "hashed_password": get_password_hash("pw"),
+            },
+        )
+    app, auth = _failing_email_app(get_session, UserModel)
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.post(
+            "/register", json={"email": "taken@x.com", "username": "new", "password": "pw123456"}
+        )
+        assert r.status_code == 202  # uniform with the new-email branch
+    await auth.shutdown()
