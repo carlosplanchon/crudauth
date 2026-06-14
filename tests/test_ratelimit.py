@@ -247,3 +247,56 @@ async def test_rate_limit_disabled_with_times_zero(get_session, UserModel) -> No
         for _ in range(10):
             assert (await c.get("/free")).status_code == 200
     await auth.shutdown()
+
+
+# --- memory-backend startup warning -----------------------------------------
+def test_warns_on_memory_backend_by_default(get_session, UserModel, caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="crudauth"):
+        CRUDAuth(
+            session=get_session,
+            user_model=UserModel,
+            SECRET_KEY="test-secret-key-0123456789-0123456789",
+            transports=[SessionTransport(cookies=CookieConfig(secure=False))],
+        )
+    assert "in-memory backend" in caplog.text
+
+
+def test_memory_warning_silenced_by_flag(get_session, UserModel, caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="crudauth"):
+        CRUDAuth(
+            session=get_session,
+            user_model=UserModel,
+            SECRET_KEY="test-secret-key-0123456789-0123456789",
+            transports=[SessionTransport(cookies=CookieConfig(secure=False))],
+            warn_on_memory_backend=False,
+        )
+    assert "in-memory backend" not in caplog.text
+
+
+def test_no_memory_warning_with_redis_backends(get_session, UserModel, caplog) -> None:
+    import logging
+
+    import fakeredis.aioredis
+
+    from crudauth.ratelimit import redis_rate_limiter
+
+    limiter = redis_rate_limiter(client=fakeredis.aioredis.FakeRedis())
+    with caplog.at_level(logging.WARNING, logger="crudauth"):
+        CRUDAuth(
+            session=get_session,
+            user_model=UserModel,
+            SECRET_KEY="test-secret-key-0123456789-0123456789",
+            transports=[
+                SessionTransport(
+                    backend="redis",
+                    redis_url="redis://localhost",
+                    cookies=CookieConfig(secure=False),
+                )
+            ],
+            rate_limiter=limiter,
+        )
+    assert "in-memory backend" not in caplog.text

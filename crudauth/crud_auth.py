@@ -45,6 +45,7 @@ from .ratelimit import (
 from .ratelimit.constants import RATE_LIMIT_NAMESPACE
 from .repository import REGISTRATION_ALLOWED_FIELDS, UserRepository
 from .storage import get_session_storage
+from .storage.constants import BACKEND_MEMORY
 from .transports.bearer.transport import BearerTransport
 from .transports.session.transport import SessionTransport
 from .utils import get_client_ip
@@ -96,6 +97,7 @@ class CRUDAuth:
         rate_limiter: "RateLimiterBackend | None" = None,
         rate_limits: dict[str, RateLimit] | None = None,
         trusted_proxy_hops: int = 0,
+        warn_on_memory_backend: bool = True,
     ):
         """Configure the auth surface.
 
@@ -140,6 +142,11 @@ class CRUDAuth:
                 proxies you control (e.g. ``1`` behind a single nginx/Caddy) so
                 the real client IP is read without trusting attacker-supplied
                 header values. See [get_client_ip][crudauth.utils.get_client_ip].
+            warn_on_memory_backend: Log a startup warning when an in-memory
+                backend is active (the zero-config default). In-memory state is
+                per-process, so under multiple workers it silently breaks; set
+                ``False`` to silence once you've accepted that (e.g. single-worker
+                dev).
 
         Raises:
             ValueError: If ``SECRET_KEY`` is empty; if ``oauth`` is set without a
@@ -184,6 +191,9 @@ class CRUDAuth:
         self._oauth_state_storage: AbstractSessionStorage[Any] | None = None
         if oauth:
             self._build_oauth(oauth, redirect_base_url)
+
+        if warn_on_memory_backend:
+            self._warn_on_memory_backend()
 
     def _build_lockout(
         self, session_transport: "SessionTransport | None"
@@ -268,7 +278,30 @@ class CRUDAuth:
     def _backend_config(self) -> tuple[str, str | None]:
         if self._session_transport is not None:
             return self._session_transport.backend, self._session_transport.redis_url
-        return "memory", None
+        return BACKEND_MEMORY, None
+
+    def _warn_on_memory_backend(self) -> None:
+        """Warn when an in-memory backend is active (the zero-config default).
+
+        In-memory state is per-process: under multiple workers it is not shared,
+        so login-lockout counters, sessions/CSRF tokens, and single-use token /
+        OAuth-state atomicity silently weaken. Production should use redis.
+        """
+        memory: list[str] = []
+        if isinstance(self.runtime.rate_limiter, MemoryRateLimiterBackend):
+            memory.append("rate limiter (lockout/throttle counters)")
+        if self._backend_config()[0] == BACKEND_MEMORY:
+            memory.append("sessions/CSRF and one-time-token/OAuth-state stores")
+        if not memory:
+            return
+        logger.warning(
+            "crudauth: using in-memory backend(s) - %s. In-memory state is per-process, so "
+            "under multiple workers it is NOT shared: lockout counters, sessions/CSRF, and "
+            "single-use token/OAuth-state atomicity weaken silently. Use redis in production "
+            "(redis_rate_limiter(...) and SessionTransport(backend='redis')), or pass "
+            "warn_on_memory_backend=False to silence.",
+            " and ".join(memory),
+        )
 
     # --- public: session manager --------------------------------------------
     @property
