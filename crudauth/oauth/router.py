@@ -1,6 +1,7 @@
 """Builds the ``/oauth/{provider}/authorize`` and ``/oauth/{provider}/callback`` routes."""
 
 from typing import TYPE_CHECKING, Annotated, Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -50,12 +51,20 @@ def build_oauth_router(
     def _safe_redirect(target: str | None) -> str:
         """Only allow same-origin relative paths, to block open-redirect abuse.
 
-        ``?redirect_to=https://evil.com`` (or protocol-relative ``//evil.com``)
-        must not become a post-auth redirect target.
+        Accepts a target only when it is a single-slash-rooted relative path with
+        no scheme and no host. Rejected: absolute URLs (``https://evil.com``),
+        protocol-relative (``//evil.com``), backslash tricks (``/\\evil.com``,
+        which several browsers normalize to ``//evil.com``), and anything with
+        control characters. Anything rejected falls back to ``default_redirect``.
         """
-        if target and target.startswith("/") and not target.startswith("//"):
-            return target
-        return default_redirect
+        if not target or not target.startswith("/") or target.startswith("//"):
+            return default_redirect
+        if "\\" in target or any(ord(c) < 0x20 for c in target):
+            return default_redirect
+        parts = urlsplit(target)
+        if parts.scheme or parts.netloc:
+            return default_redirect
+        return target
 
     def _provider(name: str) -> AbstractOAuthProvider:
         provider = providers.get(name)

@@ -236,7 +236,7 @@ class StubRedirectProvider(AbstractOAuthProvider):
 OAuthProviderFactory.register_provider("redir", StubRedirectProvider)
 
 
-async def test_open_redirect_blocked(get_session, UserModel) -> None:
+async def _run_oauth_redirect(get_session, UserModel, redirect_to):
     auth = CRUDAuth(
         session=get_session,
         user_model=UserModel,
@@ -251,14 +251,37 @@ async def test_open_redirect_blocked(get_session, UserModel) -> None:
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as c:
-        r = await c.get("/oauth/redir/authorize?redirect_to=https://evil.com")
+        r = await c.get("/oauth/redir/authorize", params={"redirect_to": redirect_to})
         state = parse_qs(urlparse(r.headers["location"]).query)["state"][0]
         r = await c.get(f"/oauth/redir/callback?code=abc&state={state}")
-        # must NOT redirect to the attacker host - falls back to the safe
-        # same-origin default (the configured redirect_base_url), never evil.com
-        assert "evil.com" not in r.headers["location"]
-        assert r.headers["location"] == "http://test"
+        location = r.headers["location"]
     await auth.shutdown()
+    return location
+
+
+@pytest.mark.parametrize(
+    "evil",
+    [
+        "https://evil.com",
+        "//evil.com",
+        "/\\evil.com",  # backslash → browsers normalize to //evil.com
+        "/\\/evil.com",
+        "\\/evil.com",
+        "javascript:alert(1)",
+        "/\tevil",  # control char
+    ],
+)
+async def test_open_redirect_blocked(evil, get_session, UserModel) -> None:
+    # every hostile target falls back to the safe same-origin default
+    location = await _run_oauth_redirect(get_session, UserModel, evil)
+    assert "evil.com" not in location
+    assert location == "http://test"
+
+
+@pytest.mark.parametrize("ok", ["/dashboard", "/a/b?c=d", "/"])
+async def test_safe_relative_redirect_honored(ok, get_session, UserModel) -> None:
+    location = await _run_oauth_redirect(get_session, UserModel, ok)
+    assert location == ok
 
 
 # =============================================================================
