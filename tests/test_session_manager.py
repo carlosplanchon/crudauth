@@ -39,6 +39,30 @@ async def test_create_and_validate() -> None:
     assert await mgr.validate_csrf_token(sid, "bogus") is False
 
 
+async def test_regenerate_csrf_rotates() -> None:
+    from crudauth.transports.session.constants import CSRF_TOKEN_ID_META_KEY
+    from crudauth.transports.session.schemas import SessionData
+
+    mgr = build_manager()
+    sid, old = await mgr.create_session(make_request(), user_id=1)
+    assert await mgr.validate_csrf_token(sid, old) is True
+
+    new = await mgr.regenerate_csrf_token(user_id=1, session_id=sid)
+    assert new and new != old
+    # old token is invalidated, new token is accepted
+    assert await mgr.validate_csrf_token(sid, old) is False
+    assert await mgr.validate_csrf_token(sid, new) is True
+    # the session now points at the NEW token (so its TTL is what slides)
+    session = await mgr.storage.get(sid, SessionData)
+    assert session is not None
+    assert session.metadata[CSRF_TOKEN_ID_META_KEY] == new
+
+
+async def test_regenerate_csrf_missing_session_returns_empty() -> None:
+    mgr = build_manager()
+    assert await mgr.regenerate_csrf_token(user_id=1, session_id="nope") == ""
+
+
 async def test_revoke() -> None:
     mgr = build_manager()
     sid, _ = await mgr.create_session(make_request(), user_id=1)

@@ -285,6 +285,46 @@ async def test_safe_relative_redirect_honored(ok, get_session, UserModel) -> Non
 
 
 # =============================================================================
+# /register survives a unique-collision race (no 500)
+# =============================================================================
+async def test_register_integrityerror_recovers_cleanly(
+    get_session, UserModel, monkeypatch
+) -> None:
+    # Force the lost-race branch deterministically: pre-check passes (no row),
+    # the insert raises IntegrityError → the route must recover to a clean
+    # duplicate response (DuplicateValueException → 422), not a 500.
+    # (A true concurrent test isn't viable here: the conftest's in-memory SQLite
+    # shares one connection via StaticPool, so two sessions corrupt each other's
+    # transaction rather than isolating - an artifact of the test DB, not the code.)
+    from sqlalchemy.exc import IntegrityError
+
+    auth = CRUDAuth(
+        session=get_session,
+        user_model=UserModel,
+        SECRET_KEY="test-secret-key-0123456789-0123456789",
+        transports=[SessionTransport(cookies=CookieConfig(secure=False))],
+    )
+
+    async def boom(*args, **kwargs):
+        raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+
+    monkeypatch.setattr(auth.repo, "create", boom)
+
+    app = FastAPI()
+    app.include_router(auth.router)
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        r = await c.post(
+            "/register", json={"email": "a@x.com", "username": "a", "password": "pw123456"}
+        )
+        assert r.status_code != 500  # the race is recovered, not crashed
+        assert r.status_code == 422  # clean duplicate (DuplicateValueException)
+    await auth.shutdown()
+
+
+# =============================================================================
 # cleanup sweep does NOT wipe login-lockout state
 # =============================================================================
 async def test_cleanup_preserves_lockout() -> None:

@@ -9,6 +9,7 @@ from typing import Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, EmailStr
+from sqlalchemy.exc import IntegrityError
 
 from .exceptions import DuplicateValueException
 from .hooks import HookContext
@@ -80,14 +81,26 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
         email = data.pop("email")
         username = data.pop("username")
 
-        if await auth.repo.get_by_email(db, email) is not None:
-            if email_on:
-                await auth._email_service.notify_existing_account(email)
-                response.status_code = status.HTTP_202_ACCEPTED
-                return {"detail": _ENROLLED_DETAIL}
-            raise DuplicateValueException("Email already registered")
-        if await auth.repo.username_exists(db, username):
+        async def _on_existing() -> dict[str, Any]:
+            """Uniform response when the email/username is already taken.
+
+            Shared by the read-time pre-check and the ``IntegrityError``
+            race-recovery so a concurrent duplicate yields the same clean result
+            (202 when email is configured, else a duplicate error) instead of a
+            500, and non-enumeration is preserved.
+            """
+            if await auth.repo.get_by_email(db, email) is not None:
+                if email_on:
+                    await auth._email_service.notify_existing_account(email)
+                    response.status_code = status.HTTP_202_ACCEPTED
+                    return {"detail": _ENROLLED_DETAIL}
+                raise DuplicateValueException("Email already registered")
             raise DuplicateValueException("Username already taken")
+
+        if await auth.repo.get_by_email(db, email) is not None or await auth.repo.username_exists(
+            db, username
+        ):
+            return await _on_existing()
 
         create_data: dict[str, Any] = {
             "email": email,
@@ -96,7 +109,11 @@ def build_register_route(auth: Any, schema: type[BaseModel] | None) -> APIRouter
         }
         create_data.update(data)
 
-        user = await auth.repo.create(db, create_data)
+        try:
+            user = await auth.repo.create(db, create_data)
+        except IntegrityError:
+            await db.rollback()
+            return await _on_existing()
         await auth.hooks.run_after_register(
             auth.repo.to_dict(user),
             db=db,

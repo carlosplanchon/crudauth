@@ -278,7 +278,34 @@ class SessionManager:
     async def regenerate_csrf_token(
         self, user_id: Any, session_id: str, expiration_seconds: int | None = None
     ) -> str:
-        return await self._generate_csrf_token(user_id, session_id, expiration_seconds)
+        """Rotate the session's CSRF token and return the new one.
+
+        Proper rotation, not just "issue another token": the new token is bound
+        to the session (so [validate_session][crudauth.transports.session.manager.SessionManager.validate_session]
+        slides *its* TTL, not the old one's), and the previous token is deleted
+        so it can no longer pass [validate_csrf_token]
+        [crudauth.transports.session.manager.SessionManager.validate_csrf_token].
+
+        Returns the new token, or ``""`` when CSRF storage is disabled or the
+        session no longer exists.
+        """
+        if self.csrf_storage is None:
+            return ""
+        session = await self.storage.get(session_id, SessionData)
+        if session is None:
+            return ""
+        ttl = (
+            expiration_seconds
+            if expiration_seconds is not None
+            else self.timeout_seconds_for(session.metadata)
+        )
+        old_token = session.metadata.get(CSRF_TOKEN_ID_META_KEY)
+        new_token = await self._generate_csrf_token(user_id, session_id, ttl)
+        session.metadata[CSRF_TOKEN_ID_META_KEY] = new_token
+        await self.storage.update(session_id, session, expiration=ttl)
+        if old_token:
+            await self.csrf_storage.delete(old_token)
+        return new_token
 
     async def validate_csrf_token(self, session_id: str, csrf_token: str) -> bool:
         """True if ``csrf_token`` is a live token bound to ``session_id``.
