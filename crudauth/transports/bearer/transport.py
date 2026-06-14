@@ -1,5 +1,6 @@
 """The bearer transport: ``Authorization: Bearer <jwt>`` for apps and scripts."""
 
+import logging
 from datetime import timedelta
 from typing import Annotated, Any
 
@@ -38,6 +39,8 @@ from .tokens import (
 )
 
 __all__ = ["BearerTransport"]
+
+logger = logging.getLogger("crudauth.bearer")
 
 
 class BearerTransport(Transport):
@@ -182,6 +185,12 @@ class BearerTransport(Transport):
             Returns ``{"access_token", "token_type"}``; the refresh token is set
             as an httpOnly cookie or returned in the body per ``refresh=``.
             Subject to the shared login lockout.
+
+            Note:
+                A disabled account returns the same "Incorrect username or
+                password" as bad credentials (no exists-but-disabled oracle for a
+                credential holder); the real reason is logged server-side
+                (``reason=disabled``).
             """
             ip = get_client_ip(request, runtime.trusted_proxy_hops)
             login_id = canonical_identifier(form_data.username)
@@ -204,7 +213,10 @@ class BearerTransport(Transport):
             ):
                 raise UnauthorizedException("Incorrect username or password")
             if not runtime.repo.is_active(user):
-                raise UnauthorizedException("Account is disabled")
+                logger.warning(
+                    "login denied: account disabled (user_id=%s)", runtime.repo.user_id(user)
+                )
+                raise UnauthorizedException("Incorrect username or password")
 
             if lockout is not None:
                 await lockout.check_and_record(ip, login_id, success=True)

@@ -99,9 +99,9 @@ async def email_client(get_session, UserModel) -> AsyncIterator[httpx.AsyncClien
 
 
 async def test_email_trigger_is_rate_limited(email_client) -> None:
-    ok1 = await email_client.post("/password/request-reset", json={"email": "a@x.com"})
-    ok2 = await email_client.post("/password/request-reset", json={"email": "b@x.com"})
-    tripped = await email_client.post("/password/request-reset", json={"email": "c@x.com"})
+    ok1 = await email_client.post("/password/reset-request", json={"email": "a@x.com"})
+    ok2 = await email_client.post("/password/reset-request", json={"email": "b@x.com"})
+    tripped = await email_client.post("/password/reset-request", json={"email": "c@x.com"})
     assert ok1.status_code == 200
     assert ok2.status_code == 200
     assert tripped.status_code == 429
@@ -109,7 +109,7 @@ async def test_email_trigger_is_rate_limited(email_client) -> None:
 
 async def test_reset_rejects_short_password(email_client) -> None:
     r = await email_client.post(
-        "/password/reset", json={"token": "whatever", "new_password": "short"}
+        "/password/reset-confirm", json={"token": "whatever", "new_password": "short"}
     )
     assert r.status_code == 422  # below MIN_PASSWORD_LENGTH
 

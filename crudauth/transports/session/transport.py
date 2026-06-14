@@ -4,6 +4,7 @@ This is the default transport - configuring nothing gives you cookie sessions,
 CSRF synchronizer-token, login lockout, secure cookies, and ``/login`` ``/logout``.
 """
 
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -43,6 +44,8 @@ from .manager import SessionManager
 from .schemas import SessionData
 
 __all__ = ["SessionTransport"]
+
+logger = logging.getLogger("crudauth.session")
 
 
 class SessionTransport(Transport):
@@ -231,6 +234,12 @@ class SessionTransport(Transport):
 
             Subject to login lockout (shared with bearer ``/token``). ``remember_me``
             switches the cookie from session-scoped to a long persistent lifetime.
+
+            Note:
+                A disabled account returns the same "Incorrect username or
+                password" as bad credentials, so a credential holder can't tell a
+                disabled account from a wrong password; the real reason is logged
+                server-side (``reason=disabled``) for operators.
             """
             assert self.manager is not None
             ip = get_client_ip(request, runtime.trusted_proxy_hops)
@@ -252,7 +261,10 @@ class SessionTransport(Transport):
             ):
                 raise UnauthorizedException("Incorrect username or password")
             if not runtime.repo.is_active(user):
-                raise UnauthorizedException("Account is disabled")
+                logger.warning(
+                    "login denied: account disabled (user_id=%s)", runtime.repo.user_id(user)
+                )
+                raise UnauthorizedException("Incorrect username or password")
 
             await self.manager.track_login_attempt(ip, login_id, success=True)
 

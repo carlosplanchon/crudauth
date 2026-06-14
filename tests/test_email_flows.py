@@ -128,23 +128,23 @@ async def test_email_change_wrong_password_rejected(ctx) -> None:
 async def test_verify_email_flow(ctx) -> None:
     client, sender, _ = ctx
     await _register(client)
-    r = await client.post("/verify-email/request", json={"email": "a@x.com"})
+    r = await client.post("/email/verify-request", json={"email": "a@x.com"})
     assert r.status_code == 200
     token = sender.token_for("verify_email")
-    r = await client.post("/verify-email/confirm", json={"token": token})
+    r = await client.post("/email/verify-confirm", json={"token": token})
     assert r.status_code == 200
     # replay is rejected (one-time use)
-    r = await client.post("/verify-email/confirm", json={"token": token})
+    r = await client.post("/email/verify-confirm", json={"token": token})
     assert r.status_code == 400
 
 
 async def test_password_reset_flow(ctx) -> None:
     client, sender, _ = ctx
     await _register(client)
-    r = await client.post("/password/request-reset", json={"email": "a@x.com"})
+    r = await client.post("/password/reset-request", json={"email": "a@x.com"})
     assert r.status_code == 200
     token = sender.token_for("reset_password")
-    r = await client.post("/password/reset", json={"token": token, "new_password": "newpw12345"})
+    r = await client.post("/password/reset-confirm", json={"token": token, "new_password": "newpw12345"})
     assert r.status_code == 200
     # old password no longer works, new one does
     assert (
@@ -157,7 +157,7 @@ async def test_password_reset_flow(ctx) -> None:
 
 async def test_reset_request_idempotent_for_unknown_email(ctx) -> None:
     client, sender, _ = ctx
-    r = await client.post("/password/request-reset", json={"email": "ghost@x.com"})
+    r = await client.post("/password/reset-request", json={"email": "ghost@x.com"})
     assert r.status_code == 200  # no enumeration
     assert sender.sent == []
 

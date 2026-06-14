@@ -85,6 +85,16 @@ async def _login(client, username="u"):
     return await client.post("/login", data={"username": username, "password": "pw123456"})
 
 
+async def test_disabled_account_login_is_uniform(ctx) -> None:
+    # a disabled account with the CORRECT password gets the same message as bad
+    # credentials - no exists-but-disabled oracle for a credential holder.
+    client, sm, UserModel = ctx
+    await _make_user(sm, UserModel, is_active=False)
+    r = await _login(client)  # correct password, but account disabled
+    assert r.status_code == 401
+    assert r.json()["detail"] == "Incorrect username or password"
+
+
 async def test_superuser_gate_blocks_normal(ctx) -> None:
     client, sm, UserModel = ctx
     await _make_user(sm, UserModel, is_superuser=False)
