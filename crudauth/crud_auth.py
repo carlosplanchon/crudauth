@@ -375,6 +375,34 @@ class CRUDAuth:
         )
 
     # --- the current_user() factory -----------------------------------------
+    async def _resolve_principal(
+        self, request: Request, db: Any, selected: list[Transport]
+    ) -> Principal | None:
+        """Run the transport loop once per request, per transport selection.
+
+        Cached on ``request.state`` so multiple gates over the same selection in
+        one request (e.g. ``current_user()`` plus a ``KeyBy.USER`` rate limit,
+        which calls ``current_user()`` internally) share a single authentication
+        - one transport loop, one user load, one CSRF check - instead of running
+        it once per dependency. Gates (superuser/scopes/check) are still applied
+        per call by the caller, on the shared principal.
+        """
+        cache = getattr(request.state, "_crudauth_principals", None)
+        if cache is None:
+            cache = {}
+            request.state._crudauth_principals = cache
+        key = tuple(t.name for t in selected)
+        if key in cache:
+            return cache[key]
+        ctx = AuthContext(request=request, db=db, runtime=self.runtime)
+        principal: Principal | None = None
+        for t in selected:
+            principal = await t.authenticate(request, ctx)
+            if principal is not None:
+                break
+        cache[key] = principal
+        return principal
+
     def current_user(
         self,
         *,
@@ -424,12 +452,7 @@ class CRUDAuth:
         async def dependency(
             request: Request, db: Annotated[Any, Depends(self.session)]
         ) -> Principal | None:
-            ctx = AuthContext(request=request, db=db, runtime=self.runtime)
-            principal: Principal | None = None
-            for t in selected:
-                principal = await t.authenticate(request, ctx)
-                if principal is not None:
-                    break
+            principal = await self._resolve_principal(request, db, selected)
 
             if principal is None:
                 if optional:

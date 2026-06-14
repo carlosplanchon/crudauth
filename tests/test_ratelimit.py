@@ -289,3 +289,49 @@ def test_no_memory_warning_with_redis_backends(get_session, UserModel, caplog) -
             rate_limiter=limiter,
         )
     assert "in-memory backend" not in caplog.text
+
+
+# --- KeyBy.USER shares authentication with the endpoint's current_user --------
+async def test_user_keyed_rate_limit_shares_authentication(
+    get_session, UserModel, monkeypatch
+) -> None:
+    # an endpoint with current_user() AND a KeyBy.USER rate limit must resolve the
+    # principal once per request (shared via request.state), not once per dependency.
+    auth = CRUDAuth(
+        session=get_session,
+        user_model=UserModel,
+        SECRET_KEY="test-secret-key-0123456789-0123456789",
+        transports=[SessionTransport(cookies=CookieConfig(secure=False))],
+    )
+    calls = {"n": 0}
+    real = auth.repo.get_by_id
+
+    async def counting(db, uid):
+        calls["n"] += 1
+        return await real(db, uid)
+
+    monkeypatch.setattr(auth.repo, "get_by_id", counting)
+
+    app = FastAPI()
+    app.include_router(auth.router)
+
+    @app.get(
+        "/shared",
+        dependencies=[Depends(auth.rate_limit("shared_limit", RateLimit(100, 60), key=KeyBy.USER))],
+    )
+    async def shared(user: Principal = Depends(auth.current_user())):
+        return {"id": user.user_id}
+
+    await auth.initialize()
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as c:
+        await c.post(
+            "/register", json={"email": "a@x.com", "username": "a", "password": "pw123456"}
+        )
+        await c.post("/login", data={"username": "a", "password": "pw123456"})
+        calls["n"] = 0
+        r = await c.get("/shared")
+        assert r.status_code == 200
+        assert calls["n"] == 1  # one shared auth, not one per dependency
+    await auth.shutdown()
