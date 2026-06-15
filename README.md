@@ -1,19 +1,66 @@
-# crudauth
+<h1 align="center">crudauth</h1>
+<p align="center" markdown=1>
+  <i><b>Batteries-included, transport-agnostic authentication for FastAPI.</b></i>
+</p>
 
-Batteries-included, transport-agnostic authentication for FastAPI.
+<p align="center">
+<a href="https://pypi.org/project/crudauth/">
+  <img src="https://img.shields.io/pypi/v/crudauth?color=%2334D058&label=pypi%20package" alt="PyPi Version"/>
+</a>
+<a href="https://pypi.org/project/crudauth/">
+  <img src="https://img.shields.io/pypi/pyversions/crudauth.svg?color=%2334D058" alt="Supported Python Versions"/>
+</a>
+<a href="https://github.com/benavlabs/crudauth/blob/main/LICENSE">
+  <img src="https://img.shields.io/badge/license-MIT-34D058" alt="License"/>
+</a>
+<a href="https://deepwiki.com/benavlabs/crudauth">
+  <img src="https://img.shields.io/badge/DeepWiki-1F2937.svg?logo=book&logoColor=white&labelColor=1F2937&color=34D058" alt="DeepWiki"/>
+</a>
+</p>
 
-One `CRUDAuth` object gives you cookie sessions, JWT bearer tokens, OAuth, email
-flows (verify / reset / change), CSRF, login lockout, and multi-device session
-management — over **your** SQLAlchemy `User` model, with app policy in hooks
-instead of forked dependency code.
+<p align="center">
+<a href="https://deepwiki.com/benavlabs/crudauth">DeepWiki</a> · <a href="https://discord.com/invite/TEmPs22gqB">Discord</a>
+</p>
 
-> Status: early `0.1` — the API is the v1 surface we're converging on.
+<hr>
+<p align="justify">
+<b>crudauth</b> gives you one <code>CRUDAuth</code> object that wires cookie sessions, JWT bearer tokens, OAuth, and email flows (verify / reset / change) - with CSRF, escalating login lockout, sudo mode, and multi-device session management - over <b>your own</b> SQLAlchemy <code>User</code> model. App policy lives in hooks, not in forked dependency code. Sessions and bearer both resolve to the same <code>Principal</code>, so narrowing or adding a transport never changes how you authorize a route.
+</p>
+
+<p><i>Part of the Benav Labs FastAPI family - pairs with <a href="https://github.com/benavlabs/fastcrud">FastCRUD</a> (CRUD &amp; endpoints) and <a href="https://github.com/benavlabs/crudadmin">CRUDAdmin</a> (admin UI).</i></p>
+<hr>
+
+> **Status:** early `0.2` (alpha) — this is the v1 surface we're converging on. APIs may still shift before `1.0`.
+
+## Features
+
+- 🔀 **Transport-agnostic**: cookie sessions and JWT bearer tokens behind a single `Principal`; first credential present wins, and authorization code never depends on *which* transport authenticated.
+- 🪪 **Your model, your schema**: works over your existing SQLAlchemy `User` via a logical-field `column_map` — no forced renames, no second user table.
+- 🛡️ **Secure by default**: synchronizer-token CSRF, escalating per-IP/per-user login lockout, bcrypt with SHA-256 pre-hash (no 72-byte truncation), timing-equalized login, and trusted-proxy IP resolution.
+- 🌐 **OAuth**: Google, GitHub, or a custom provider — with the `state` bound to the initiating browser to block login CSRF.
+- ✉️ **Email flows**: verify / reset / change — you implement the `EmailSender` port, the package mints and verifies the signed, single-use tokens.
+- 🔼 **Sudo mode**: short-lived re-authentication to gate sensitive actions, stamped on the session and cleared on logout.
+- 🖥️ **Multi-device sessions**: list, revoke one, or "sign out everywhere", with a configurable per-user session cap.
+- 🧩 **App policy in hooks**: `AuthHooks` for welcome email, trial grant, audit logging — fired uniformly across every auth path.
+- 🔁 **Pluggable backends**: in-memory for dev, Redis for production — for sessions, CSRF, lockout counters, and one-time tokens.
+- ⌨️ **Fully typed & async**: ships `py.typed`, built on SQLAlchemy 2.0 and Pydantic v2.
+
+## Requirements
+
+- **Python** 3.10+
+- **FastAPI**, **SQLAlchemy 2.0+**, **Pydantic v2** (installed as dependencies)
 
 ## Install
 
 ```bash
 pip install crudauth            # core (session + bearer)
 pip install "crudauth[all]"     # + httpx (oauth), redis, user-agents
+```
+
+Or with uv:
+
+```bash
+uv add crudauth
 ```
 
 ## Quickstart
@@ -97,8 +144,8 @@ never on bearer/api-key paths.
 
 ## Storage & lifespan
 
-Server-side backends open connections and run a cleanup sweep — call
-`initialize()` / `shutdown()` in your lifespan:
+Server-side backends open connections on startup — call `initialize()` /
+`shutdown()` in your lifespan:
 
 ```python
 @asynccontextmanager
@@ -108,13 +155,49 @@ async def lifespan(app: FastAPI):
     await auth.shutdown()
 ```
 
-## OAuth, email, hooks
+## OAuth, email, hooks, sudo
 
-See the usage cookbook for OAuth (Google/GitHub/custom providers), email flows
-(implement the `EmailSender` port; the package mints/verifies the signed
+See the usage cookbook for OAuth (Google / GitHub / custom providers), email
+flows (implement the `EmailSender` port; the package mints/verifies the signed
 tokens), lifecycle hooks (`AuthHooks` — welcome email, trial grant, audit log),
-and dropping to primitives.
+sudo mode (`sudo=SudoConfig()` + `auth.require_sudo()`), and dropping to
+primitives.
+
+## Architecture
+
+crudauth is ports-and-adapters with feature slices and a single composition
+root (`CRUDAuth`). The layering and the import-direction rules live in
+[`crudauth/ARCHITECTURE.md`](crudauth/ARCHITECTURE.md) — read it before adding a
+transport, OAuth provider, or storage backend; each is meant to be a drop-in
+file, not a cross-cutting edit.
 
 ## License
 
-MIT
+[`MIT`](LICENSE)
+
+## Contact
+
+Benav Labs – [benav.io](https://benav.io), [Discord](https://discord.com/invite/TEmPs22gqB)
+
+## Build a full SaaS on FastAPI
+
+crudauth handles authentication in **[FastroAI](https://fastro.ai)** — the complete FastAPI SaaS template: auth, Stripe payments (subscriptions, credits, discounts), entitlements, transactional email, an Astro frontend, and PydanticAI agents, wired together and production-ready.
+
+<p align="center">
+  <a href="https://fastro.ai">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/benavlabs/FastAPI-boilerplate/main/docs/assets/fastroai-card-dark.png">
+      <img src="https://raw.githubusercontent.com/benavlabs/FastAPI-boilerplate/main/docs/assets/fastroai-card-light.png" alt="FastroAI - the complete FastAPI SaaS template: auth, Stripe payments, entitlements, email, frontend and AI" width="100%">
+    </picture>
+  </a>
+</p>
+
+<p align="center"><b><a href="https://fastro.ai">Ship your SaaS faster with FastroAI →</a></b></p>
+
+<hr>
+<a href="https://benav.io">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/benavlabs/FastAPI-boilerplate/main/docs/assets/benav-labs-banner-dark.png">
+    <img src="https://raw.githubusercontent.com/benavlabs/FastAPI-boilerplate/main/docs/assets/benav-labs-banner-light.png" alt="Benav Labs - benav.io" width="100%"/>
+  </picture>
+</a>
