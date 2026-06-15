@@ -39,6 +39,7 @@ all = ["httpx>=0.24.0", "redis>=5.0.0", "user-agents>=2.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/benavlabs/crudauth"
+Documentation = "https://benavlabs.github.io/crudauth"
 Repository = "https://github.com/benavlabs/crudauth"
 
 [dependency-groups]

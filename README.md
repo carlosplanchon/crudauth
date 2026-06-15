@@ -20,13 +20,16 @@
 <a href="https://github.com/benavlabs/crudauth/blob/main/LICENSE">
   <img src="https://img.shields.io/badge/license-MIT-34D058" alt="License"/>
 </a>
+<a href="https://benavlabs.github.io/crudauth">
+  <img src="https://img.shields.io/badge/docs-benavlabs.github.io%2Fcrudauth-34D058?logo=materialformkdocs&logoColor=white" alt="Documentation"/>
+</a>
 <a href="https://deepwiki.com/benavlabs/crudauth">
   <img src="https://img.shields.io/badge/DeepWiki-1F2937.svg?logo=book&logoColor=white&labelColor=1F2937&color=34D058" alt="DeepWiki"/>
 </a>
 </p>
 
 <p align="center">
-<a href="https://deepwiki.com/benavlabs/crudauth">DeepWiki</a> · <a href="https://discord.com/invite/TEmPs22gqB">Discord</a>
+<a href="https://benavlabs.github.io/crudauth">Docs</a> · <a href="https://deepwiki.com/benavlabs/crudauth">DeepWiki</a> · <a href="https://discord.com/invite/TEmPs22gqB">Discord</a>
 </p>
 
 <hr>
@@ -35,8 +38,6 @@
 </p>
 
 <hr>
-
-> **Status:** early `0.2` (alpha) - this is the v1 surface we're converging on. APIs may still shift before `1.0`.
 
 ## Features
 
