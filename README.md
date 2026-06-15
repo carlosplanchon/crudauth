@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://github.com/benavlabs/crudauth">
+  <a href="https://benavlabs.github.io/crudauth">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="docs/assets/crudauth-cover-dark.png">
       <img src="docs/assets/crudauth-cover-light.png" alt="crudauth" width="50%">
