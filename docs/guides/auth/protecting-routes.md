@@ -140,3 +140,7 @@ async def close_account(
 
 See the [rate limiting](../../api/ratelimit.md) and [sudo](../../api/sudo.md) reference
 pages for those pieces.
+
+---
+
+[Next: Sessions →](sessions.md){ .md-button .md-button--primary }

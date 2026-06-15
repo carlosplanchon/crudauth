@@ -79,6 +79,10 @@ edit_uri = "edit/main/docs/"
         { "Overview" = "guides/auth/index.md" },
         { "Protecting routes" = "guides/auth/protecting-routes.md" },
         { "Sessions" = "guides/auth/sessions.md" },
+        { "Bearer tokens" = "guides/auth/bearer.md" },
+        { "Multiple transports" = "guides/auth/multiple-transports.md" },
+        { "OAuth" = "guides/auth/oauth.md" },
+        { "Sudo mode" = "guides/auth/sudo.md" },
     ] },
 ]
 
@@ -127,8 +131,9 @@ admonition = {}
 "pymdownx.inlinehilite" = {}
 
 [[project.markdown_extensions]]
-# auto-append the glossary so abbreviations get hover tooltips on every page
-"pymdownx.snippets" = { auto_append = ["includes/abbreviations.md"], base_path = ["."] }
+# auto-append the glossary so abbreviations get hover tooltips on every page.
+# It's a .txt so zensical injects it as a snippet but doesn't build it as a page.
+"pymdownx.snippets" = { auto_append = ["includes/abbreviations.txt"], base_path = ["docs"] }
 
 [[project.markdown_extensions]]
 "pymdownx.superfences" = {}

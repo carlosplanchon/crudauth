@@ -8,6 +8,11 @@
     --md-accent-fg-color: #14b8a6;
 }
 
+/* Center standalone call-to-action buttons (the "Next" links at the end of pages). */
+.md-typeset p:has(> .md-button) {
+    text-align: center;
+}
+
 /* Center markdown tables: they shrink to their content, and left-aligned narrow
    tables look off against the full-width prose and code. */
 .md-typeset__table {

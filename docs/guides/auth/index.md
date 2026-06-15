@@ -27,7 +27,7 @@ How to authenticate requests and authorize them, whichever transport the caller 
 
     JWT access and refresh tokens, scopes, and revocation.
 
-    Coming soon.
+    [Bearer tokens →](bearer.md)
 
 -   **Multiple transports**
 
@@ -35,7 +35,7 @@ How to authenticate requests and authorize them, whichever transport the caller 
 
     Run sessions and bearer together behind one `Principal`.
 
-    Coming soon.
+    [Multiple transports →](multiple-transports.md)
 
 -   **OAuth**
 
@@ -43,7 +43,7 @@ How to authenticate requests and authorize them, whichever transport the caller 
 
     Google, GitHub, and custom providers.
 
-    Coming soon.
+    [OAuth →](oauth.md)
 
 -   **Sudo mode**
 
@@ -51,6 +51,6 @@ How to authenticate requests and authorize them, whichever transport the caller 
 
     Short-lived re-authentication for sensitive actions.
 
-    Coming soon.
+    [Sudo mode →](sudo.md)
 
 </div>

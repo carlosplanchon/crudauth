@@ -144,3 +144,7 @@ app = FastAPI(lifespan=lifespan)
 
 The full set of knobs is on the
 [`SessionManager`](../../api/transports.md) reference.
+
+---
+
+[Next: Bearer tokens →](bearer.md){ .md-button .md-button--primary }
