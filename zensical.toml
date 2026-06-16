@@ -121,6 +121,20 @@ edit_uri = "edit/main/docs/"
     { "Utilities" = "api/utils.md" },
 ]
 
+[[project.nav]]
+"Architecture" = "architecture.md"
+
+[[project.nav]]
+"Community" = [
+    { "Overview" = "community/index.md" },
+    { "Contributing" = "community/contributing.md" },
+    { "Code of Conduct" = "community/code-of-conduct.md" },
+    { "License" = "community/license.md" },
+]
+
+[[project.nav]]
+"Changelog" = "changelog.md"
+
 # ==============================================================================
 # Markdown extensions
 # ==============================================================================
