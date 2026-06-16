@@ -30,7 +30,7 @@ self-contained, shows the setup that produces the endpoints, and links into the
 
     Storage and lifespan, rate limiting and lockout, and lifecycle hooks.
 
-    Coming soon.
+    [Infrastructure →](infra/index.md)
 
 </div>
 

@@ -94,6 +94,12 @@ edit_uri = "edit/main/docs/"
         { "Passwords" = "guides/accounts/passwords.md" },
         { "Devices & sessions" = "guides/accounts/session-management.md" },
     ] },
+    { "Infrastructure" = [
+        { "Overview" = "guides/infra/index.md" },
+        { "Storage & lifespan" = "guides/infra/storage.md" },
+        { "Rate limiting & lockout" = "guides/infra/rate-limiting.md" },
+        { "Hooks" = "guides/infra/hooks.md" },
+    ] },
 ]
 
 [[project.nav]]

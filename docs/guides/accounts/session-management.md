@@ -69,4 +69,4 @@ SessionTransport(max_sessions_per_user=5)
 
 ---
 
-[Next: API reference →](../../api/index.md){ .md-button .md-button--primary }
+[Next: Storage & lifespan →](../infra/storage.md){ .md-button .md-button--primary }
