@@ -50,6 +50,24 @@ so you can copy one and have the account shape you want.
 
     [Read →](email-password-and-google.md)
 
+-   **[A token API (bearer)](token-api.md)**
+
+    ---
+
+    For mobile, CLI, and SPA clients: JWT access tokens, refresh, and scopes, no cookies or
+    CSRF.
+
+    [Read →](token-api.md)
+
+-   **[Web and API in one backend](web-and-api.md)**
+
+    ---
+
+    Cookie sessions and bearer tokens together, both resolving to one Principal your routes
+    gate on.
+
+    [Read →](web-and-api.md)
+
 </div>
 
 **Prerequisites:** a FastAPI app and an async SQLAlchemy 2.0 session dependency. Each recipe
