@@ -129,6 +129,7 @@ edit_uri = "edit/main/docs/"
     { "Web and API in one backend" = "cookbook/web-and-api.md" },
     { "Server-set fields at signup" = "cookbook/server-set-fields.md" },
     { "Onboard an existing users table" = "cookbook/existing-users-table.md" },
+    { "Going to production" = "cookbook/going-to-production.md" },
 ]
 
 [[project.nav]]

@@ -86,6 +86,15 @@ so you can copy one and have the account shape you want.
 
     [Read →](existing-users-table.md)
 
+-   **[Going to production](going-to-production.md)**
+
+    ---
+
+    Redis-backed shared state, lifespan wiring, secrets from the environment, secure cookies,
+    and the real client IP behind a proxy.
+
+    [Read →](going-to-production.md)
+
 </div>
 
 **Prerequisites:** a FastAPI app and an async SQLAlchemy 2.0 session dependency. Each recipe
