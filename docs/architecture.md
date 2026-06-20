@@ -1,6 +1,6 @@
 # Architecture
 
-crudauth is ports-and-adapters with feature slices and a single composition root. This page
+CRUDAuth is ports-and-adapters with feature slices and a single composition root. This page
 is the map: where things live, which way imports are allowed to point, and how to add a
 transport, OAuth provider, or backend without a cross-cutting edit.
 

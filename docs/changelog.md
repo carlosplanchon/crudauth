@@ -1,6 +1,6 @@
 # Changelog
 
-Notable changes to crudauth, newest first. crudauth is pre-1.0, so minor versions may include
+Notable changes to CRUDAuth, newest first. CRUDAuth is pre-1.0, so minor versions may include
 breaking changes; those are called out explicitly.
 
 ___
