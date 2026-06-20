@@ -262,7 +262,7 @@ class EmailFlowService:
             raise BadRequestException("Invalid or expired token")
         if not self.repo.recovery_verified(user):
             await self.repo.mark_recovery_verified(db, user)
-            await self.hooks.run_after_email_verified(
+            await self.hooks.run_after_recovery_verified(
                 self.repo.to_dict(user), db=db, context=HookContext()
             )
         return user
