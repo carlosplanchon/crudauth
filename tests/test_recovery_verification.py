@@ -227,6 +227,23 @@ async def test_phone_verify_delivers_to_phone_and_gates_on_it() -> None:
         assert (await client.get("/secret")).status_code == 200  # now verified
 
 
+async def test_phone_reset_delivers_to_the_phone() -> None:
+    # password reset re-points to the recovery factor too, not just verify: the
+    # reset token is delivered to the phone, the same generalization as verify.
+    async with _phone_app() as (auth, _client, maker, channel):
+        repo = auth.repo
+        async with maker() as db:
+            await repo.create(
+                db,
+                {"username": "morph", "phone": "999", "hashed_password": get_password_hash("pw")},
+            )
+        async with maker() as db:
+            await auth._email_service.request_password_reset(db, "999")
+        intent = channel.intents[-1]
+        assert intent.recipient == "999"  # delivered to the phone, not an email
+        assert intent.kind == "reset_password" and intent.token is not None
+
+
 async def test_phone_verify_requires_the_delivered_token() -> None:
     async with _phone_app() as (auth, _client, maker, channel):
         repo = auth.repo
