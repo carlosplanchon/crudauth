@@ -12,6 +12,7 @@ async def me(user: Principal = Depends(auth.current_user())):
 
 import inspect
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, Annotated, Any, Callable, Sequence
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -35,10 +36,11 @@ from .email.service import EmailFlowService
 from .exceptions import (
     BadRequestException,
     ForbiddenException,
+    NotFoundException,
     RateLimitException,
     UnauthorizedException,
 )
-from .hooks import AuthHooks
+from .hooks import AuthHooks, HookContext
 from .identity import IdentityConfig
 from .oauth import OAuthAccountService, OAuthProviderFactory
 from .oauth.router import build_oauth_router
@@ -57,8 +59,9 @@ from .storage import get_session_storage
 from .sudo import SudoConfig, SudoManager
 from .storage.constants import BACKEND_MEMORY
 from .transports.bearer.transport import BearerTransport
+from .transports.session.constants import REMEMBER_ME_META_KEY
 from .transports.session.transport import SessionTransport
-from .utils import get_client_ip, get_password_hash, is_unusable_password
+from .utils import get_client_ip, get_password_hash, is_unusable_password, verify_password
 
 if TYPE_CHECKING:  # pragma: no cover
     from .ratelimit import RateLimiterBackend
@@ -71,6 +74,26 @@ __all__ = ["CRUDAuth"]
 
 class _SetPasswordIn(BaseModel):
     new_password: Annotated[str, Field(min_length=MIN_PASSWORD_LENGTH)]
+
+
+class _ChangePasswordIn(BaseModel):
+    current_password: str
+    new_password: Annotated[str, Field(min_length=MIN_PASSWORD_LENGTH)]
+
+
+class SessionInfo(BaseModel):
+    """One active session, as returned by ``GET /sessions``.
+
+    ``device`` is the parsed user-agent info (browser/os/device flags), empty when
+    UA parsing isn't available; timestamps serialize to ISO-8601.
+    """
+
+    session_id: str
+    device: dict[str, Any] = Field(default_factory=dict)
+    ip: str = ""
+    created_at: datetime
+    last_activity: datetime
+    current: bool = False
 
 
 class CRUDAuth:
@@ -766,7 +789,139 @@ class CRUDAuth:
             )
             return {"detail": "Password set."}
 
+        @router.post(
+            "/change-password",
+            dependencies=[Depends(self.rate_limit("change_password", key=KeyBy.USER))],
+        )
+        async def change_password(
+            body: _ChangePasswordIn,
+            request: Request,
+            principal: Annotated[Principal, Depends(self.current_user())],
+            db: Annotated[Any, Depends(self.session)],
+        ):
+            """Change the password for an authenticated account, verifying the current one.
+
+            Note:
+                Re-auth is the *current password*: the active session/token proves
+                presence, the current password proves intent. Allowed over any
+                transport - CSRF is automatic on the session path, and bearer has
+                no CSRF surface. An account with no usable password gets a 400
+                (use ``/set-password`` to create the first one).
+
+            Note:
+                A password change is a compromise response: it bumps
+                ``token_version`` (evicting bearer tokens; a no-op without the
+                column) and revokes the user's OTHER sessions, keeping the current
+                one. Same eviction shape as a password reset.
+            """
+            user = principal.user
+            current_hash = self.repo.get(user, "hashed_password", "")
+            if is_unusable_password(current_hash):
+                raise BadRequestException(
+                    "Account has no password; use /set-password to create one."
+                )
+            if not verify_password(body.current_password, current_hash):
+                raise UnauthorizedException("Current password is incorrect.")
+            await self.repo.update(
+                db, user, {"hashed_password": get_password_hash(body.new_password)}
+            )
+            await self.repo.increment_token_version(db, user)
+            if self.sessions is not None:
+                await self.sessions.revoke_all(
+                    principal.user_id, exclude=principal.metadata.get("session_id")
+                )
+            await self.hooks.run_after_password_changed(
+                self.repo.to_dict(user),
+                db=db,
+                context=HookContext(transport=principal.transport, request=request),
+            )
+            return {"detail": "Password changed."}
+
+        if self._session_transport is not None and self._session_transport.management_routes:
+            self._add_session_management_routes(router)
+
         return router
+
+    def _add_session_management_routes(self, router: APIRouter) -> None:
+        """Mount the opt-in session/CSRF management routes (``SessionTransport(management_routes=True)``)."""
+        sessions = self.sessions
+        assert sessions is not None
+        session_user = self.current_user(transport="session")
+
+        @router.post(
+            "/logout-all",
+            dependencies=[Depends(self.rate_limit("logout_all", key=KeyBy.USER))],
+        )
+        async def logout_all(
+            response: Response,
+            principal: Annotated[Principal, Depends(session_user)],
+            keep_current: bool = False,
+        ):
+            """Sign out of all sessions. ``keep_current=True`` keeps the calling session."""
+            current_sid = principal.metadata.get("session_id")
+            revoked = await sessions.revoke_all(
+                principal.user_id, exclude=current_sid if keep_current else None
+            )
+            if not keep_current:
+                sessions.clear_session_cookies(response)
+            return {"detail": "Signed out of all sessions.", "revoked": revoked}
+
+        @router.get("/sessions", response_model=list[SessionInfo])
+        async def list_sessions(principal: Annotated[Principal, Depends(session_user)]):
+            """List the user's active sessions. ``[]`` if the backend can't index by user."""
+            return await sessions.list_for_user(
+                principal.user_id, current_session_id=principal.metadata.get("session_id")
+            )
+
+        @router.delete("/sessions/{session_id}")
+        async def revoke_session(
+            session_id: str,
+            response: Response,
+            principal: Annotated[Principal, Depends(session_user)],
+        ):
+            """Revoke one session by id (ownership-checked; 404 also covers 'not yours')."""
+            ok = await sessions.revoke(session_id, owner_id=principal.user_id)
+            if not ok:
+                raise NotFoundException("Session not found.")
+            if session_id == principal.metadata.get("session_id"):
+                sessions.clear_session_cookies(response)
+            return {"detail": "Session revoked."}
+
+        @router.post(
+            "/csrf/refresh",
+            dependencies=[Depends(self.rate_limit("csrf_refresh", key=KeyBy.IP))],
+        )
+        async def csrf_refresh(request: Request, response: Response):
+            """Re-mint the CSRF cookie when it's lost but the session is still valid.
+
+            Note:
+                Deliberately NOT behind ``current_user`` - requiring a valid CSRF
+                header to refresh CSRF would defeat the recovery purpose. It
+                resolves the session cookie directly. An attacker can *trigger*
+                this cross-origin (the session cookie auto-rides) but cannot
+                *read* the response or the new cookie (CORS), so they never learn
+                the token; and the self-heal guard returns the existing token
+                unchanged when it's already valid, so a triggered call never
+                rotates a healthy token.
+            """
+            if sessions.csrf_storage is None:
+                raise BadRequestException("CSRF is disabled.")
+            session_id = request.cookies.get(sessions.session_cookie_name)
+            session = await sessions.validate_session(session_id) if session_id else None
+            if session is None or session_id is None:
+                raise UnauthorizedException("Not authenticated")
+            cookie = request.cookies.get(sessions.csrf_cookie_name)
+            if cookie and await sessions.validate_csrf_token(session_id, cookie):
+                token = cookie
+            else:
+                token = await sessions.regenerate_csrf_token(session.user_id, session_id)
+                max_age = (
+                    sessions.timeout_seconds_for(session.metadata)
+                    if session.metadata.get(REMEMBER_ME_META_KEY)
+                    else None
+                )
+                sessions.set_csrf_cookie(response, token, max_age=max_age)
+            return {"csrf_token": token}
 
     # --- assembled routers ---------------------------------------------------
     @property
