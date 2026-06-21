@@ -3,18 +3,37 @@
 Every login is a separate server-side session, so you can show users where they're signed in
 and let them sign out of one device or all of them.
 
-These aren't built-in routes. CRUDAuth exposes the session manager as `auth.sessions`
-whenever a `SessionTransport` is configured (the default), and you add the endpoints your UI
-needs on top of it:
+## Built-in routes (opt-in)
+
+Pass `management_routes=True` to the `SessionTransport` and CRUDAuth mounts the device-management
+routes for you:
 
 ```python
-auth = CRUDAuth(session=get_session, user_model=User, SECRET_KEY="change-me")  # SessionTransport by default
+auth = CRUDAuth(
+    session=get_session, user_model=User, SECRET_KEY="change-me",
+    transports=[SessionTransport(management_routes=True)],
+)
 app.include_router(auth.router)
-# auth.sessions.list_for_user / revoke / revoke_all are now available
 ```
 
-See [Getting started](../../getting-started.md) for the base app. The examples below are
-routes you add to your own `app`.
+| Route | What it does |
+|---|---|
+| `GET /sessions` | list the user's active sessions (`SessionInfo[]`; `current` flags the caller's) |
+| `DELETE /sessions/{id}` | revoke one session (ownership-checked; 404 if not found or not yours) |
+| `POST /logout-all` | revoke all sessions; `?keep_current=true` keeps the calling one |
+| `POST /csrf/refresh` | re-mint the CSRF cookie when it's lost but the session is still valid |
+
+All but `/csrf/refresh` run behind a session principal, so the unsafe verbs are CSRF-protected
+automatically. `/csrf/refresh` is the deliberate exception: it resolves the session cookie directly
+(requiring a valid CSRF header to *refresh* CSRF would defeat the recovery purpose) and self-heals,
+returning the existing token unchanged when it's already valid. The routes are opt-in (`False` by
+default) because adding endpoints and a device list isn't universally wanted.
+
+## Rolling your own
+
+If you need a different shape, CRUDAuth exposes the session manager as `auth.sessions` whenever a
+`SessionTransport` is configured, and you build the endpoints your UI needs on top of it. The
+examples below are routes you add to your own `app`.
 
 ## List a user's sessions
 

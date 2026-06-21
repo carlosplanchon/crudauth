@@ -130,6 +130,7 @@ edit_uri = "edit/main/docs/"
     { "Server-set fields at signup" = "cookbook/server-set-fields.md" },
     { "Onboard an existing users table" = "cookbook/existing-users-table.md" },
     { "Going to production" = "cookbook/going-to-production.md" },
+    { "Account & device management" = "cookbook/account-management.md" },
 ]
 
 [[project.nav]]
