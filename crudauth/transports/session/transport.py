@@ -67,6 +67,10 @@ class SessionTransport(Transport):
             per-IP key identifies an individual client, not a shared NAT/CGNAT
             egress). Governs the shared lockout (both ``/login`` and ``/token``).
             See [LockoutPolicy][crudauth.ratelimit.policy.LockoutPolicy].
+        management_routes: When ``True``, mount the opt-in session/CSRF management
+            routes on the shared router: ``POST /logout-all``, ``GET /sessions``,
+            ``DELETE /sessions/{id}``, and ``POST /csrf/refresh``. Default ``False``
+            (adding routes is a choice, and a device list isn't universally wanted).
 
     Example:
         ```python
@@ -95,6 +99,7 @@ class SessionTransport(Transport):
         login_lockout_base_seconds: int = DEFAULT_LOGIN_LOCKOUT_BASE_SECONDS,
         login_lockout_max_seconds: int = DEFAULT_LOGIN_LOCKOUT_MAX_SECONDS,
         on_login_success: Literal["clear_all", "clear_user_only"] = "clear_all",
+        management_routes: bool = False,
     ):
         self.backend = backend
         self.redis_url = redis_url
@@ -109,6 +114,7 @@ class SessionTransport(Transport):
         self.login_lockout_base_seconds = login_lockout_base_seconds
         self.login_lockout_max_seconds = login_lockout_max_seconds
         self.on_login_success = on_login_success
+        self.management_routes = management_routes
         self.manager: SessionManager | None = None
 
     # --- wiring --------------------------------------------------------------

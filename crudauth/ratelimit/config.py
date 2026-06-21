@@ -48,4 +48,7 @@ DEFAULT_RATE_LIMITS: dict[str, RateLimit] = {
     "password_reset_request": RateLimit(times=5, seconds=SECONDS_PER_HOUR),
     "email_change_request": RateLimit(times=3, seconds=SECONDS_PER_HOUR),
     "existing_account_notice": RateLimit(times=5, seconds=SECONDS_PER_HOUR),
+    "change_password": RateLimit(times=5, seconds=SECONDS_PER_HOUR),
+    "logout_all": RateLimit(times=10, seconds=SECONDS_PER_HOUR),
+    "csrf_refresh": RateLimit(times=30, seconds=SECONDS_PER_HOUR),
 }

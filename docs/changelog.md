@@ -5,6 +5,29 @@ breaking changes; those are called out explicitly.
 
 ___
 
+## 0.5.0 - 2026-06-21
+
+Account & device management. The session/device endpoints apps kept hand-writing are now opt-in
+built-in routes, plus an in-session password change. Everything is additive.
+
+#### Added
+- **Session & CSRF management routes** (`SessionTransport(management_routes=True)`, off by default):
+  `GET /sessions` (device list), `DELETE /sessions/{id}` (revoke one, ownership-checked, `404` if not
+  found or not yours), `POST /logout-all` (with `?keep_current=true`), and `POST /csrf/refresh`
+  (re-mint a lost CSRF cookie; self-heals; the deliberate non-`current_user` recovery path). Thin
+  handlers over the existing `SessionManager`; the three mutating ones enforce CSRF via the session
+  transport.
+- **`POST /change-password`** (always mounted): change a known password while signed in. The current
+  password is the re-authentication; a successful change bumps `token_version` and revokes the user's
+  *other* sessions (keeping the current one), and fires `on_after_password_changed`. `401` on a wrong
+  current password, `400` on an OAuth-only account (use `/set-password`).
+- **`on_after_password_changed`** hook, distinct from `on_after_password_reset` (the token flow).
+- **`SessionInfo`** is now exported (the `GET /sessions` response model), and a flat **Endpoints**
+  API-reference page maps every mountable route in one place.
+- `SessionManager.set_csrf_cookie(...)` (the CSRF half of `set_session_cookies`, reusable on its own).
+
+___
+
 ## 0.4.0 - 2026-06-21
 
 Custom email bodies. `EmailSender.send` now receives an `EmailContext`, so you render your own

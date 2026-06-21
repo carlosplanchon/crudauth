@@ -95,6 +95,15 @@ so you can copy one and have the account shape you want.
 
     [Read →](going-to-production.md)
 
+-   **[Account & device management](account-management.md)**
+
+    ---
+
+    A settings page from opt-in routes: list devices, sign out one or all, change password,
+    self-heal a lost CSRF cookie.
+
+    [Read →](account-management.md)
+
 </div>
 
 **Prerequisites:** a FastAPI app and an async SQLAlchemy 2.0 session dependency. Each recipe

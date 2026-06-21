@@ -358,16 +358,30 @@ class SessionManager:
             path=self.cookie_path,
             max_age=max_age,
         )
-        if csrf_token:
-            response.set_cookie(
-                key=self.csrf_cookie_name,
-                value=csrf_token,
-                httponly=False,
-                secure=self.cookie_secure,
-                samesite=self.cookie_samesite,
-                path=self.cookie_path,
-                max_age=max_age,
-            )
+        self.set_csrf_cookie(response, csrf_token, max_age=max_age)
+
+    def set_csrf_cookie(
+        self, response: Response, csrf_token: str, max_age: int | None = None
+    ) -> None:
+        """Write just the CSRF cookie (used on its own by the ``/csrf/refresh`` recovery path).
+
+        Note:
+            NOT ``httponly`` - the CSRF cookie must be readable by JS so the SPA
+            can echo it in the ``X-CSRF-Token`` header (the synchronizer-token
+            check). Same ``secure``/``samesite``/``path`` as the session cookie so
+            the pair can't disagree. A falsy ``csrf_token`` is a no-op.
+        """
+        if not csrf_token:
+            return
+        response.set_cookie(
+            key=self.csrf_cookie_name,
+            value=csrf_token,
+            httponly=False,
+            secure=self.cookie_secure,
+            samesite=self.cookie_samesite,
+            path=self.cookie_path,
+            max_age=max_age,
+        )
 
     def clear_session_cookies(self, response: Response) -> None:
         """Delete the session + CSRF cookies.

@@ -49,6 +49,25 @@ This is **set**, not change: it refuses with `400` if the account already has a 
 password (use the reset flow to change an existing one), and it doesn't evict other sessions,
 because establishing a first credential isn't a compromise response.
 
+## Changing a known password
+
+A signed-in user with a password changes it through `POST /change-password`, a built-in route. The
+current password is the re-authentication (the active session/token proves presence, the current
+password proves intent), so no token round-trip is needed.
+
+```bash
+curl -X POST http://localhost:8000/change-password \
+  -H "X-CSRF-Token: <token>" -H "Content-Type: application/json" \
+  -b "session_id=<cookie>" \
+  -d '{"current_password": "old-one", "new_password": "a-new-strong-one"}'
+```
+
+Allowed over any transport: CSRF is automatic on the session path, and bearer has no CSRF surface.
+A wrong current password is a `401`; an account with no usable password is a `400` (use
+`/set-password` instead). Because a password change is a compromise response, it bumps
+`token_version` (evicting bearer tokens) and revokes the user's *other* sessions, keeping the
+current one, and fires the `on_after_password_changed` hook.
+
 ## Resetting a forgotten password
 
 A user who can't log in uses the email reset flow: `POST /password/reset-request` sends a
