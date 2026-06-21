@@ -99,8 +99,10 @@ async def test_change_password_success_rotates_evicts_and_fires_hook(
         assert r.status_code == 200
 
         assert len(fired) == 1  # on_after_password_changed fired once
-        assert (await b.get("/me")).status_code == 401  # other session evicted
-        assert (await a.get("/me")).status_code == 200  # caller's session kept
+        resp = await b.get("/me")
+        assert resp.status_code == 401  # other session evicted
+        resp = await a.get("/me")
+        assert resp.status_code == 200  # caller's session kept
 
         repo = UserRepository(UserModel)
         async with sessionmaker() as db:
@@ -109,12 +111,10 @@ async def test_change_password_success_rotates_evicts_and_fires_hook(
 
     # the hash actually rotated: new password logs in, old does not
     async with _client(app) as fresh:
-        assert (
-            await fresh.post("/login", data={"username": "alice", "password": "new-strong-1"})
-        ).status_code == 200
-        assert (
-            await fresh.post("/login", data={"username": "alice", "password": "pw123456"})
-        ).status_code == 401
+        resp = await fresh.post("/login", data={"username": "alice", "password": "new-strong-1"})
+        assert resp.status_code == 200
+        resp = await fresh.post("/login", data={"username": "alice", "password": "pw123456"})
+        assert resp.status_code == 401
     await auth.shutdown()
 
 

@@ -51,7 +51,8 @@ async def test_routes_gated_off_by_default(get_session, UserModel) -> None:
     await auth.initialize()
     async with _client(app) as c:
         await _register_login(c)
-        assert (await c.get("/sessions")).status_code == 404  # not mounted
+        resp = await c.get("/sessions")
+        assert resp.status_code == 404  # not mounted
     await auth.shutdown()
 
 
@@ -63,7 +64,8 @@ async def test_logout_all_revokes_and_clears(get_session, UserModel) -> None:
         r = await c.post("/logout-all", headers={"X-CSRF-Token": csrf})
         assert r.status_code == 200
         assert r.json()["revoked"] >= 1
-        assert (await c.get("/me")).status_code == 401  # cookie cleared, session gone
+        resp = await c.get("/me")
+        assert resp.status_code == 401  # cookie cleared, session gone
     await auth.shutdown()
 
 
@@ -75,8 +77,10 @@ async def test_logout_all_keep_current(get_session, UserModel) -> None:
         await _register_login(b)  # second session for the same user
         r = await a.post("/logout-all?keep_current=true", headers={"X-CSRF-Token": csrf_a})
         assert r.status_code == 200 and r.json()["revoked"] == 1  # revoked B, kept A
-        assert (await a.get("/me")).status_code == 200  # caller's session survives
-        assert (await b.get("/me")).status_code == 401  # the other session is gone
+        resp = await a.get("/me")
+        assert resp.status_code == 200  # caller's session survives
+        resp = await b.get("/me")
+        assert resp.status_code == 401  # the other session is gone
     await auth.shutdown()
 
 
@@ -108,23 +112,24 @@ async def test_delete_own_other_unknown_and_cross_user(get_session, UserModel) -
         # revoke alice's other session (B)
         r = await a.delete(f"/sessions/{b_id}", headers={"X-CSRF-Token": csrf_a})
         assert r.status_code == 200
-        assert (await b.get("/me")).status_code == 401
+        resp = await b.get("/me")
+        assert resp.status_code == 401
 
         # unknown id -> 404
-        assert (
-            await a.delete("/sessions/nope", headers={"X-CSRF-Token": csrf_a})
-        ).status_code == 404
+        resp = await a.delete("/sessions/nope", headers={"X-CSRF-Token": csrf_a})
+        assert resp.status_code == 404
 
         # another user's session id -> 404 (ownership check, no leak)
-        assert (
-            await other.delete(f"/sessions/{a_id}", headers={"X-CSRF-Token": csrf_other})
-        ).status_code == 404
-        assert (await a.get("/me")).status_code == 200  # untouched
+        resp = await other.delete(f"/sessions/{a_id}", headers={"X-CSRF-Token": csrf_other})
+        assert resp.status_code == 404
+        resp = await a.get("/me")
+        assert resp.status_code == 200  # untouched
 
         # revoke own current session -> 200 + cookie cleared
         r = await a.delete(f"/sessions/{a_id}", headers={"X-CSRF-Token": csrf_a})
         assert r.status_code == 200
-        assert (await a.get("/me")).status_code == 401
+        resp = await a.get("/me")
+        assert resp.status_code == 401
     await auth.shutdown()
 
 
@@ -152,7 +157,8 @@ async def test_csrf_refresh_no_session_401(get_session, UserModel) -> None:
     app, auth = _build(get_session, UserModel)
     await auth.initialize()
     async with _client(app) as c:
-        assert (await c.post("/csrf/refresh")).status_code == 401  # no session cookie
+        resp = await c.post("/csrf/refresh")
+        assert resp.status_code == 401  # no session cookie
     await auth.shutdown()
 
 
@@ -161,5 +167,6 @@ async def test_csrf_refresh_disabled_400(get_session, UserModel) -> None:
     await auth.initialize()
     async with _client(app) as c:
         await _register_login(c)
-        assert (await c.post("/csrf/refresh")).status_code == 400  # CSRF disabled
+        resp = await c.post("/csrf/refresh")
+        assert resp.status_code == 400  # CSRF disabled
     await auth.shutdown()
