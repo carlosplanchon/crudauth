@@ -86,6 +86,19 @@ async def reports(user: Principal = Depends(auth.current_user(scopes=["reports:r
 `grantable_scopes` is the ceiling: a token can never request or refresh into scopes beyond
 it, so a credential can't widen its own authority.
 
+## Minting a token in your own code
+
+`/token` is the usual entry, but you can mint a token pair anywhere (a webhook, an exchange
+endpoint, a script) with `auth.issue_tokens`:
+
+```python
+tokens = auth.issue_tokens(user, scopes=["read"])  # {"access_token", "token_type", "refresh_token"}
+```
+
+It's the same issuance `/token` uses: scopes are clamped to `grantable_scopes` and both tokens
+carry the `token_version` epoch. Reach for it instead of the raw token functions, which skip the
+clamp and the epoch. See [Use the building blocks](../../cookbook/use-the-building-blocks.md).
+
 ## Revoking tokens
 
 JWTs are stateless, so they can't be deleted one by one. CRUDAuth embeds a `token_version`

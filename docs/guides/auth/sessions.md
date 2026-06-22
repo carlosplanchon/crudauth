@@ -42,6 +42,24 @@ auth = CRUDAuth(
 `POST /login` is a form post and accepts a `remember_me` flag (see below). To gate your own
 routes, see [Protecting routes](protecting-routes.md).
 
+### A login of your own
+
+Need a custom login (a different form, an extra step)? Call `auth.authenticate_password` for the
+hardened credential check (the shared lockout, timing-equalized verification, and the
+disabled-account check) and establish the session yourself, instead of reassembling those by hand:
+
+```python
+@app.post("/my-login")
+async def my_login(body: LoginIn, request: Request, response: Response, db: DbDep):
+    user = await auth.authenticate_password(db, body.username, body.password, request=request)
+    sid, csrf = await auth.sessions.create_session(request, user_id=auth.repo.user_id(user))
+    auth.sessions.set_session_cookies(response, sid, csrf)
+    return {"csrf_token": csrf}
+```
+
+A wrong password raises `UnauthorizedException`, a tripped lockout `RateLimitException` - the same
+responses `/login` gives. See [Use the building blocks](../../cookbook/use-the-building-blocks.md).
+
 ## How a session works
 
 On a successful `POST /login`, CRUDAuth:
