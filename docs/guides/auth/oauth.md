@@ -49,6 +49,11 @@ On a successful callback, CRUDAuth finds or creates the user:
   user (a required `name`, a default tier), use `new_user_fields` / `new_user_defaults`, which
   run on this path too; see [Registration](../accounts/registration.md#setting-columns-the-server-controls).
 
+This linking logic lives in `auth.oauth` (an `OAuthAccountService`, or `None` when OAuth isn't
+configured), so a hand-written callback can reuse it:
+`user, created = await auth.oauth.get_or_create_user(info, db)`. See
+[Use the building blocks](../../cookbook/use-the-building-blocks.md).
+
 ## Custom providers
 
 Add a provider by implementing the `AbstractOAuthProvider` port and registering it with

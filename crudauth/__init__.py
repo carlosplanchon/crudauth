@@ -39,14 +39,23 @@ from .exceptions import (
     UnprocessableEntityException,
 )
 from .crud_auth import CRUDAuth, SessionInfo
+from .email.service import EmailFlowService
 from .hooks import AuthHooks, HookContext
 from .identity import IdentityConfig
 from .models.mixin import AuthUserMixin, make_auth_identity
-from .oauth import OAuthCredentials
+from .oauth import OAuthAccountService, OAuthCredentials
 from .principal import Principal
 from .provisioning import NewUserContext, NewUserFields
-from .sudo import SudoConfig
+from .repository import UserRepository
+from .sudo import SudoConfig, SudoManager
 from .transports import BearerTransport, SessionTransport
+from .transports.session.manager import SessionManager
+from .utils import (
+    get_password_hash,
+    is_unusable_password,
+    make_unusable_password,
+    verify_password,
+)
 
 __version__ = version("crudauth")
 
@@ -76,6 +85,18 @@ __all__ = [
     "AuthContext",
     "CookieConfig",
     "SudoConfig",
+    # toolbox: reusable building blocks (use the wired services off `auth`, or
+    # construct/type them directly). Token issuance is intentionally not exported
+    # here - use `auth.issue_tokens(...)` so the scope clamp and epoch come along.
+    "UserRepository",
+    "SessionManager",
+    "SudoManager",
+    "EmailFlowService",
+    "OAuthAccountService",
+    "get_password_hash",
+    "verify_password",
+    "is_unusable_password",
+    "make_unusable_password",
     # exceptions
     "BadRequestException",
     "NotFoundException",

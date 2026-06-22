@@ -65,7 +65,14 @@ class EmailFlowService:
 
     Construction is additive: pass ``config=EmailConfig(...)`` (back-compat, which
     builds an [EmailChannel][crudauth.email.channel.EmailChannel] and seeds the
-    token TTLs) and/or ``channels=[...]`` plus explicit ``*_ttl_hours``.
+    token TTLs) and/or ``channels=[...]`` plus explicit ``*_ttl_hours``. Reachable
+    as ``auth.emails`` (``None`` when no recovery is configured).
+
+    Example:
+        ```python
+        if auth.emails is not None:
+            await auth.emails.request_password_reset(db, email)
+        ```
     """
 
     def __init__(

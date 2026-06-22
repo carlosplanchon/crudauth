@@ -190,6 +190,27 @@ balancer. See `references/production.md` for storage, lockout tuning, and sudo m
 
 ---
 
+## Use the building blocks (routes are optional)
+
+The facade wires the pieces and hands them back, so a hand-written route can use them à la carte:
+`auth.repo` (UserRepository), `auth.sessions` (SessionManager), `auth.sudo`, `auth.emails`
+(EmailFlowService or `None`), `auth.oauth` (OAuthAccountService or `None`), plus `auth.current_user()`
+on your own routes and `auth.session_router` / `auth.bearer_router` to mount only one transport.
+
+For the auth-critical flows, use the primitives that **carry** the hardening, not the raw pieces:
+
+- `await auth.authenticate_password(db, identifier, password, request=request)` — the credential check
+  behind `/login` and `/token` (shared lockout, timing-equalized verify, disabled-account). Returns the
+  user; raises `UnauthorizedException` / `RateLimitException`.
+- `auth.issue_tokens(user, scopes=[...])` — the issuance behind `/token` (scopes clamped to
+  `grantable_scopes`, `token_version` epoch stamped). Reach for this, not bare `create_access_token`,
+  which skips the clamp and the epoch.
+
+The exported pure helpers (`get_password_hash`, `verify_password`, `is_unusable_password`,
+`make_unusable_password`) round it out. Don't reassemble lockout/timing/non-enumeration by hand.
+
+---
+
 ## Security invariants (do not break these)
 
 These are the load-bearing rules. Breaking one is a vulnerability, not a style nit.

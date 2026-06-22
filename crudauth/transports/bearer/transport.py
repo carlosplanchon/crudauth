@@ -1,6 +1,5 @@
 """The bearer transport: ``Authorization: Bearer <jwt>`` for apps and scripts."""
 
-import logging
 from datetime import timedelta
 from typing import Annotated, Any
 
@@ -13,15 +12,10 @@ from ...constants import (
     SECONDS_PER_DAY,
 )
 from ...core import AuthContext, AuthRuntime, CookieConfig, Transport
-from ...exceptions import RateLimitException, UnauthorizedException
+from ...exceptions import UnauthorizedException
 from ...hooks import HookContext
 from ...principal import Principal
-from ...utils import (
-    canonical_identifier,
-    dummy_verify_password,
-    get_client_ip,
-    verify_password,
-)
+from ...utils import get_client_ip
 from .constants import (
     REFRESH_LOCATION_BODY,
     REFRESH_LOCATION_COOKIE,
@@ -39,8 +33,6 @@ from .tokens import (
 )
 
 __all__ = ["BearerTransport"]
-
-logger = logging.getLogger("crudauth.bearer")
 
 
 class BearerTransport(Transport):
@@ -193,36 +185,11 @@ class BearerTransport(Transport):
                 (``reason=disabled``).
             """
             ip = get_client_ip(request, runtime.trusted_proxy_hops)
-            login_id = canonical_identifier(form_data.username)
-            lockout = runtime.lockout
-            if lockout is not None:
-                allowed, _, retry_after = await lockout.check_and_record(
-                    ip, login_id, success=False
-                )
-                if not allowed:
-                    raise RateLimitException(
-                        "Too many login attempts. Try again later.", retry_after=retry_after
-                    )
+            user = await runtime.authenticate_password(
+                db, form_data.username, form_data.password, request=request
+            )
 
-            user = await runtime.repo.resolve_login(db, form_data.username)
-            if user is None:
-                dummy_verify_password(form_data.password)
-                raise UnauthorizedException("Incorrect username or password")
-            if not verify_password(
-                form_data.password, runtime.repo.get(user, "hashed_password", "")
-            ):
-                raise UnauthorizedException("Incorrect username or password")
-            if not runtime.repo.is_active(user):
-                logger.warning(
-                    "login denied: account disabled (user_id=%s)", runtime.repo.user_id(user)
-                )
-                raise UnauthorizedException("Incorrect username or password")
-
-            if lockout is not None:
-                await lockout.check_and_record(ip, login_id, success=True)
-
-            scopes = self._grant_scopes(form_data.scopes)
-            body = self._mint(runtime, user, scopes, response)
+            body = self.issue_tokens(user, scopes=form_data.scopes, response=response)
             await runtime.hooks.run_after_login(
                 runtime.repo.to_dict(user),
                 request=request,
@@ -252,19 +219,33 @@ class BearerTransport(Transport):
             if payload.get(TOKEN_VERSION_CLAIM, 0) != runtime.repo.token_version(user):
                 raise UnauthorizedException("Invalid or expired refresh token")
             scopes = self._clamp_scopes(payload.get("scopes") or ())
-            access = create_access_token(
-                {
-                    "sub": str(runtime.repo.user_id(user)),
-                    TOKEN_VERSION_CLAIM: runtime.repo.token_version(user),
-                },
-                runtime.secret_key,
-                expires_delta=timedelta(seconds=self.access_ttl),
-                algorithm=runtime.algorithm,
-                scopes=list(scopes),
-            )
+            access = self._access_token(user, scopes)
             return {"access_token": access, "token_type": TOKEN_TYPE_BEARER}
 
         return router
+
+    # --- token issuance ------------------------------------------------------
+    def issue_tokens(
+        self, user: Any, *, scopes: list[str] | None = None, response: Response | None = None
+    ) -> dict[str, Any]:
+        """Mint an access (+refresh) token pair for a user.
+
+        The hardened issuance behind ``/token``, exposed so a hand-written token
+        endpoint (or a webhook minting a token) gets it right: ``scopes`` are
+        clamped to ``grantable_scopes`` (a caller can't self-grant), and both
+        tokens carry the ``token_version`` epoch so a password reset revokes them.
+        With ``response`` and ``refresh="cookie"`` the refresh token is set as an
+        httpOnly cookie; otherwise it's returned under ``refresh_token``.
+
+        Example:
+            ```python
+            @app.post("/exchange")
+            async def exchange(user=Depends(my_check)):
+                return auth.issue_tokens(user, scopes=["read"])
+            ```
+        """
+        granted = self._grant_scopes(scopes)
+        return self._mint(self.runtime, user, granted, response)
 
     # --- helpers -------------------------------------------------------------
     def _clamp_scopes(self, scopes: list[str] | tuple[str, ...]) -> tuple[str, ...]:
@@ -277,18 +258,25 @@ class BearerTransport(Transport):
         asked = tuple(requested) if requested else self.default_scopes
         return self._clamp_scopes(asked)
 
+    def _access_token(self, user: Any, scopes: tuple[str, ...]) -> str:
+        """Mint an access token for ``user`` with ``scopes``, stamped with the epoch."""
+        return create_access_token(
+            {
+                "sub": str(self.runtime.repo.user_id(user)),
+                TOKEN_VERSION_CLAIM: self.runtime.repo.token_version(user),
+            },
+            self.runtime.secret_key,
+            expires_delta=timedelta(seconds=self.access_ttl),
+            algorithm=self.runtime.algorithm,
+            scopes=list(scopes),
+        )
+
     def _mint(
-        self, runtime: AuthRuntime, user: Any, scopes: tuple[str, ...], response: Response
+        self, runtime: AuthRuntime, user: Any, scopes: tuple[str, ...], response: Response | None
     ) -> dict[str, Any]:
         uid = str(runtime.repo.user_id(user))
         ver = runtime.repo.token_version(user)
-        access = create_access_token(
-            {"sub": uid, TOKEN_VERSION_CLAIM: ver},
-            runtime.secret_key,
-            expires_delta=timedelta(seconds=self.access_ttl),
-            algorithm=runtime.algorithm,
-            scopes=list(scopes),
-        )
+        access = self._access_token(user, scopes)
         refresh = create_refresh_token(
             {"sub": uid, TOKEN_VERSION_CLAIM: ver, "scopes": list(scopes)},
             runtime.secret_key,

@@ -131,6 +131,7 @@ edit_uri = "edit/main/docs/"
     { "Onboard an existing users table" = "cookbook/existing-users-table.md" },
     { "Going to production" = "cookbook/going-to-production.md" },
     { "Account & device management" = "cookbook/account-management.md" },
+    { "Use the building blocks" = "cookbook/use-the-building-blocks.md" },
 ]
 
 [[project.nav]]

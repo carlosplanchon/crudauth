@@ -8,6 +8,7 @@ facade tries configured transports in order, first-credential-wins.
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -15,7 +16,16 @@ from typing import TYPE_CHECKING, Any, Callable, Literal
 from fastapi import APIRouter, Request
 
 from .constants import DEFAULT_ALGORITHM
+from .exceptions import RateLimitException, UnauthorizedException
 from .principal import Principal
+from .utils import (
+    canonical_identifier,
+    dummy_verify_password,
+    get_client_ip,
+    verify_password,
+)
+
+logger = logging.getLogger("crudauth")
 
 SameSite = Literal["lax", "strict", "none"]
 
@@ -86,6 +96,56 @@ class AuthRuntime:
     rate_limiter: "RateLimiterBackend | None" = None
     lockout: "LockoutPolicy | None" = None
     trusted_proxy_hops: int = 0
+
+    async def authenticate_password(
+        self, db: "AsyncSession", identifier: str, password: str, *, request: Request
+    ) -> Any:
+        """Verify a username/email + password with the full login hardening.
+
+        This is the hardened credential check behind ``/login`` and ``/token``,
+        exposed so a hand-written login route gets the same protections instead of
+        reassembling them: the shared escalating lockout (keyed by IP + identifier,
+        so it can't be sidestepped), timing-equalized verification (no
+        user-enumeration oracle), and the disabled-account check. Returns the user
+        row on success - the caller then establishes a session or mints a token.
+
+        Raises:
+            RateLimitException: The lockout is engaged for this IP/identifier.
+            UnauthorizedException: Unknown identifier, wrong password, or a disabled
+                account - all reported with the same generic message.
+
+        Example:
+            ```python
+            @app.post("/my-login")
+            async def my_login(request: Request, form: MyForm, db=Depends(get_db)):
+                user = await auth.runtime.authenticate_password(
+                    db, form.username, form.password, request=request
+                )
+                # ... now establish your own session or issue your own token
+            ```
+        """
+        ip = get_client_ip(request, self.trusted_proxy_hops)
+        login_id = canonical_identifier(identifier)
+        if self.lockout is not None:
+            allowed, _, retry_after = await self.lockout.check_and_record(
+                ip, login_id, success=False
+            )
+            if not allowed:
+                raise RateLimitException(
+                    "Too many login attempts. Try again later.", retry_after=retry_after
+                )
+        user = await self.repo.resolve_login(db, identifier)
+        if user is None:
+            dummy_verify_password(password)
+            raise UnauthorizedException("Incorrect username or password")
+        if not verify_password(password, self.repo.get(user, "hashed_password", "")):
+            raise UnauthorizedException("Incorrect username or password")
+        if not self.repo.is_active(user):
+            logger.warning("login denied: account disabled (user_id=%s)", self.repo.user_id(user))
+            raise UnauthorizedException("Incorrect username or password")
+        if self.lockout is not None:
+            await self.lockout.check_and_record(ip, login_id, success=True)
+        return user
 
 
 @dataclass

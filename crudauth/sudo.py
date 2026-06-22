@@ -65,6 +65,13 @@ class SudoManager:
 
     Built by [CRUDAuth][crudauth.crud_auth.CRUDAuth] when ``sudo=`` is set and a
     session transport is configured, and exposed as ``auth.sudo``.
+
+    Example:
+        ```python
+        @app.post("/sudo")
+        async def sudo(body: SudoIn, request: Request, user=Depends(auth.current_user())):
+            await auth.sudo.elevate(user, body.password, request=request)
+        ```
     """
 
     def __init__(

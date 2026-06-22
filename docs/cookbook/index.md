@@ -104,6 +104,15 @@ so you can copy one and have the account shape you want.
 
     [Read →](account-management.md)
 
+-   **[Use the building blocks](use-the-building-blocks.md)**
+
+    ---
+
+    CRUDAuth as a toolbox: a hand-rolled login over `authenticate_password`, tokens via
+    `issue_tokens`, the wired services off `auth` — routes optional.
+
+    [Read →](use-the-building-blocks.md)
+
 </div>
 
 **Prerequisites:** a FastAPI app and an async SQLAlchemy 2.0 session dependency. Each recipe

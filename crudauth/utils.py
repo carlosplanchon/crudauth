@@ -50,6 +50,11 @@ def get_password_hash(password: str) -> str:
     The password is SHA-256 pre-hashed before bcrypt (see [_bcrypt_input]
     [crudauth.utils._bcrypt_input]), so there is no effective length ceiling and
     no silent truncation.
+
+    Example:
+        ```python
+        await auth.repo.create(db, {"email": e, "hashed_password": get_password_hash(pw)})
+        ```
     """
     hashed: bytes = bcrypt.hashpw(_bcrypt_input(password), bcrypt.gensalt())
     return hashed.decode()
@@ -61,6 +66,12 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     Returns ``False`` (rather than raising) when the stored hash is malformed,
     so a corrupted row produces a clean "invalid password" path instead of a
     500 - which would both leak information and be a DoS lever.
+
+    Example:
+        ```python
+        if not verify_password(form.password, auth.repo.get(user, "hashed_password", "")):
+            raise UnauthorizedException("Incorrect username or password")
+        ```
     """
     try:
         return bcrypt.checkpw(_bcrypt_input(plain_password), hashed_password.encode())
@@ -95,6 +106,12 @@ def make_unusable_password() -> str:
     bcrypt hash, so [verify_password][crudauth.utils.verify_password] always returns ``False`` for it. The
     random suffix makes every sentinel unique. Mirrors Django's
     ``set_unusable_password``.
+
+    Example:
+        ```python
+        # an OAuth-created account with no password yet
+        await auth.repo.create(db, {"email": e, "hashed_password": make_unusable_password()})
+        ```
     """
     return "!" + secrets.token_urlsafe(16)
 
@@ -105,6 +122,12 @@ def is_unusable_password(hashed_password: str) -> bool:
     ``True`` means the account has no real password set - an OAuth-only account
     (see [make_unusable_password][crudauth.utils.make_unusable_password], whose
     sentinel starts with ``!``, never a valid bcrypt hash).
+
+    Example:
+        ```python
+        if is_unusable_password(auth.repo.get(user, "hashed_password", "")):
+            ...  # OAuth-only: offer /set-password rather than a password change
+        ```
     """
     return not hashed_password or hashed_password.startswith("!")
 

@@ -146,6 +146,18 @@ know:
   capture it: it closes when the request ends, so read what you need, then enqueue the send
   (as above) rather than blocking on it.
 
+## Triggering recovery from your own code
+
+When recovery is configured, the flow service is reachable as `auth.emails` (or `None`), so a
+custom route can drive the same token mint/verify the endpoints use:
+
+```python
+if auth.emails is not None:
+    await auth.emails.request_password_reset(db, email)
+```
+
+See [Use the building blocks](../../cookbook/use-the-building-blocks.md).
+
 ## Hooks
 
 `on_after_recovery_verified`, `on_after_password_reset`, and `on_after_email_changed` fire after
