@@ -36,6 +36,22 @@ _UNCOERCIBLE = object()
 
 
 class UserRepository:
+    """Logical-field data access over the app's user model.
+
+    The single boundary to the user table: other layers read and write through
+    these methods (``get_by_email``, ``resolve_login``, ``create``, ``update``,
+    ``token_version``, ...), addressing *logical* fields (``email``,
+    ``hashed_password``, ...) that the ``column_map`` resolves to real columns.
+    Reachable as ``auth.repo``.
+
+    Example:
+        ```python
+        user = await auth.repo.get_by_email(db, "alice@example.com")
+        if user is not None and auth.repo.is_active(user):
+            ...
+        ```
+    """
+
     def __init__(
         self,
         model: type[Any],

@@ -269,6 +269,9 @@ class CRUDAuth:
         self._session_transport = next(
             (t for t in self.transports if isinstance(t, SessionTransport)), None
         )
+        self._bearer_transport = next(
+            (t for t in self.transports if isinstance(t, BearerTransport)), None
+        )
         self.runtime.lockout = self._build_lockout(self._session_transport)
         for transport in self.transports:
             transport.bind(self.runtime)
@@ -283,6 +286,7 @@ class CRUDAuth:
             self._build_email(email, channels, algorithm)
 
         self._oauth_router: APIRouter | None = None
+        self._oauth_service: OAuthAccountService | None = None
         self._oauth_state_storage: AbstractSessionStorage[Any] | None = None
         if oauth:
             self._build_oauth(oauth, redirect_base_url)
@@ -437,6 +441,37 @@ class CRUDAuth:
             )
         return self._session_transport.manager
 
+    @property
+    def emails(self) -> "EmailFlowService | None":
+        """The [EmailFlowService][crudauth.email.service.EmailFlowService], or ``None`` when no recovery is configured.
+
+        Drives the recovery flows (`request_recovery_verification`, `reset_password`,
+        `request_email_change`, ...) so a hand-written route can trigger them with
+        the same token mint/verify the built-in endpoints use.
+
+        Example:
+            ```python
+            if auth.emails is not None:
+                await auth.emails.request_password_reset(db, email)
+            ```
+        """
+        return self._email_service
+
+    @property
+    def oauth(self) -> "OAuthAccountService | None":
+        """The [OAuthAccountService][crudauth.oauth.OAuthAccountService], or ``None`` when OAuth isn't configured.
+
+        Exposes `get_or_create_user` (provider-id → verified-email link → create) so
+        a hand-written OAuth callback can reuse the linking/creation rules.
+
+        Example:
+            ```python
+            if auth.oauth is not None:
+                user, created = await auth.oauth.get_or_create_user(info, db)
+            ```
+        """
+        return self._oauth_service
+
     # --- email wiring --------------------------------------------------------
     def _build_email(
         self, email: Any, channels: list[DeliveryChannel] | None, algorithm: str
@@ -492,13 +527,14 @@ class CRUDAuth:
             backend, prefix="oauth_state:", expiration=OAUTH_STATE_TTL_SECONDS, redis_url=redis_url
         )
         self._oauth_state_storage = state_storage
+        self._oauth_service = OAuthAccountService(
+            self.repo, self.new_user_fields, self._new_user_defaults
+        )
         self._oauth_router = build_oauth_router(
             runtime=self.runtime,
             providers=providers,
             state_storage=state_storage,
-            account_service=OAuthAccountService(
-                self.repo, self.new_user_fields, self._new_user_defaults
-            ),
+            account_service=self._oauth_service,
             session_manager=self.sessions,
             default_redirect=redirect_base_url,
         )
@@ -546,6 +582,54 @@ class CRUDAuth:
                 break
         cache[key] = principal
         return principal
+
+    async def authenticate_password(
+        self, db: Any, identifier: str, password: str, *, request: Request
+    ) -> Any:
+        """Verify a username/email + password with the full login hardening.
+
+        The hardened credential check behind ``/login`` and ``/token``, exposed so
+        a hand-written login route gets the same protections (shared escalating
+        lockout, timing-equalized verification, disabled-account check) instead of
+        reassembling them. Returns the user row; raises ``RateLimitException`` on
+        lockout and ``UnauthorizedException`` on bad credentials. Delegates to
+        [AuthRuntime.authenticate_password][crudauth.core.AuthRuntime.authenticate_password].
+
+        Example:
+            ```python
+            @app.post("/my-login")
+            async def my_login(request: Request, form: MyForm, db=Depends(get_db)):
+                user = await auth.authenticate_password(
+                    db, form.username, form.password, request=request
+                )
+                sid, csrf = await auth.sessions.create_session(request, auth.repo.user_id(user))
+                ...
+            ```
+        """
+        return await self.runtime.authenticate_password(db, identifier, password, request=request)
+
+    def issue_tokens(self, user: Any, *, scopes: list[str] | None = None) -> dict[str, Any]:
+        """Mint a bearer access (+refresh) token pair for a user.
+
+        The hardened issuance behind ``/token``, exposed for a hand-written token
+        endpoint: ``scopes`` are clamped to the transport's ``grantable_scopes``
+        (no self-grant) and both tokens carry the ``token_version`` epoch (so a
+        password reset revokes them). The refresh token is returned under
+        ``refresh_token`` (there's no ``Response`` to set a cookie on). Delegates to
+        [BearerTransport.issue_tokens][crudauth.transports.bearer.transport.BearerTransport.issue_tokens].
+
+        Raises:
+            RuntimeError: If no [BearerTransport][crudauth.transports.bearer.transport.BearerTransport] is configured.
+
+        Example:
+            ```python
+            user = await auth.authenticate_password(db, ident, pw, request=request)
+            tokens = auth.issue_tokens(user, scopes=["read"])
+            ```
+        """
+        if self._bearer_transport is None:
+            raise RuntimeError("issue_tokens requires a BearerTransport")
+        return self._bearer_transport.issue_tokens(user, scopes=scopes)
 
     def current_user(
         self,

@@ -38,6 +38,19 @@ def _sanitize_username(raw: str) -> str:
 
 
 class OAuthAccountService:
+    """Resolve an OAuth identity to a user, creating or linking as needed.
+
+    The linking rules live here (lookup order: provider id → verified email →
+    create), so a hand-written callback reuses them. Reachable as ``auth.oauth``
+    (``None`` when OAuth isn't configured).
+
+    Example:
+        ```python
+        if auth.oauth is not None:
+            user, created = await auth.oauth.get_or_create_user(info, db)
+        ```
+    """
+
     def __init__(
         self,
         repo: UserRepository,

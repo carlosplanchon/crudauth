@@ -4,7 +4,6 @@ This is the default transport - configuring nothing gives you cookie sessions,
 CSRF synchronizer-token, login lockout, secure cookies, and ``/login`` ``/logout``.
 """
 
-import logging
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Form, Request, Response
@@ -22,17 +21,12 @@ from ...constants import (
     SECONDS_PER_MINUTE,
 )
 from ...core import AuthContext, AuthRuntime, CookieConfig, Transport
-from ...exceptions import CSRFException, RateLimitException, UnauthorizedException
+from ...exceptions import CSRFException
 from ...hooks import HookContext
 from ...principal import Principal
 from ...storage import get_session_storage
 from ...storage.constants import BACKEND_MEMORY
-from ...utils import (
-    canonical_identifier,
-    dummy_verify_password,
-    get_client_ip,
-    verify_password,
-)
+from ...utils import get_client_ip
 from .constants import (
     CSRF_HEADER_NAME,
     CSRF_STORAGE_PREFIX,
@@ -44,8 +38,6 @@ from .manager import SessionManager
 from .schemas import SessionData
 
 __all__ = ["SessionTransport"]
-
-logger = logging.getLogger("crudauth.session")
 
 
 class SessionTransport(Transport):
@@ -256,30 +248,9 @@ class SessionTransport(Transport):
             """
             assert self.manager is not None
             ip = get_client_ip(request, runtime.trusted_proxy_hops)
-            login_id = canonical_identifier(form_data.username)
-            allowed, _, retry_after = await self.manager.track_login_attempt(
-                ip, login_id, success=False
+            user = await runtime.authenticate_password(
+                db, form_data.username, form_data.password, request=request
             )
-            if not allowed:
-                raise RateLimitException(
-                    "Too many login attempts. Try again later.", retry_after=retry_after
-                )
-
-            user = await runtime.repo.resolve_login(db, form_data.username)
-            if user is None:
-                dummy_verify_password(form_data.password)
-                raise UnauthorizedException("Incorrect username or password")
-            if not verify_password(
-                form_data.password, runtime.repo.get(user, "hashed_password", "")
-            ):
-                raise UnauthorizedException("Incorrect username or password")
-            if not runtime.repo.is_active(user):
-                logger.warning(
-                    "login denied: account disabled (user_id=%s)", runtime.repo.user_id(user)
-                )
-                raise UnauthorizedException("Incorrect username or password")
-
-            await self.manager.track_login_attempt(ip, login_id, success=True)
 
             metadata = {REMEMBER_ME_META_KEY: True} if remember_me else {}
             session_id, csrf = await self.manager.create_session(
